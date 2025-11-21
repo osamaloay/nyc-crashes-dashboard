@@ -178,7 +178,8 @@ def load_data(full: bool = False):
           try:
                string_cols = df_loaded.select_dtypes(include=['object', 'string']).columns.tolist()
                if string_cols:
-                    unk_mask = df_loaded[string_cols].apply(lambda s: s.fillna('').astype(str).str.strip().str.lower() == 'unknown')
+                    # Mark rows where any string column contains 'unknown' (case-insensitive)
+                    unk_mask = df_loaded[string_cols].apply(lambda s: s.fillna('').astype(str).str.strip().str.lower().str.contains('unknown'))
                     rows_with_unk = unk_mask.any(axis=1)
                     num_drop = int(rows_with_unk.sum())
                     if num_drop > 0:
