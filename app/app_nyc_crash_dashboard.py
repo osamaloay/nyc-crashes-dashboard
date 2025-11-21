@@ -48,7 +48,22 @@ def load_data():
         st.error("Parquet file not found! Upload `nyc_crashes.parquet` to the repo.")
         return pd.DataFrame()
 
-df = load_data()
+# Attempt to load data but don't let startup crash the app — log errors and continue with empty DataFrame
+try:
+     df = load_data()
+except Exception as e:
+     import traceback, sys
+     err = traceback.format_exc()
+     # write to a startup log so Streamlit Cloud logs capture it
+     try:
+          with open('streamlit_startup.log', 'a', encoding='utf-8') as f:
+               f.write('\n--- Startup error ---\n')
+               f.write(err)
+     except Exception:
+          # best-effort logging to stderr
+          print('Failed to write startup log', file=sys.stderr)
+     # fall back to an empty DataFrame so the app can still start and show an error in the UI
+     df = pd.DataFrame()
 
 
 # Clean borough names to proper capitalization
