@@ -9,3 +9,5 @@ sqlalchemy
 requests==2.31.0
 beautifulsoup4==4.12.2
 fastparquet
+psutil
+duckdb==1.28.2
