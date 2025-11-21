@@ -37,55 +37,64 @@ import os
 st.set_page_config(page_title="NYC Crash Dashboard", layout="wide")
 
 PARQUET_PATH = "nyc_crashes.parquet"
+CSV_PATH = "merged_cleaned_dataset.csv"
 
-@st.cache_data(show_spinner="Loading Parquet dataset…")
+@st.cache_data(show_spinner="Loading dataset…")
 def load_data():
-    if os.path.exists(PARQUET_PATH):
-        df = pd.read_parquet(PARQUET_PATH)
-        st.success(f"Loaded {len(df):,} rows from Parquet file.")
-        return df
-    else:
-        st.error("Parquet file not found! Upload `nyc_crashes.parquet` to the repo.")
-        return pd.DataFrame()
+     """Load dataset: prefer CSV (`merged_cleaned_dataset.csv`) if present, otherwise try Parquet.
+     Return an empty DataFrame on any failure so Streamlit can start.
+     """
+     # Try CSV first (user-supplied cleaned CSV)
+     if os.path.exists(CSV_PATH):
+          try:
+               df = pd.read_csv(CSV_PATH, parse_dates=["CRASH_DATETIME"], low_memory=False)
+               st.success(f"Loaded {len(df):,} rows from CSV file.")
+               return df
+          except Exception as e:
+               st.error(f"Failed to load CSV `{CSV_PATH}`: {e}")
+               return pd.DataFrame()
 
-# Attempt to load data but don't let startup crash the app — log errors and continue with empty DataFrame
+     # Fallback to parquet if CSV not present
+     if os.path.exists(PARQUET_PATH):
+          try:
+               df = pd.read_parquet(PARQUET_PATH)
+               st.success(f"Loaded {len(df):,} rows from Parquet file.")
+               return df
+          except Exception as e:
+               st.error(f"Failed to load Parquet `{PARQUET_PATH}`: {e}")
+               return pd.DataFrame()
+
+     # No dataset found
+     st.error(f"No dataset found. Add `{CSV_PATH}` or `{PARQUET_PATH}` to the repo.")
+     return pd.DataFrame()
+
+# Attempt to load data but don't let startup crash the app — simple fallback
 try:
-     df = load_data()
-except Exception as e:
-     import traceback, sys
-     err = traceback.format_exc()
-     # write to a startup log so Streamlit Cloud logs capture it
-     try:
-          with open('streamlit_startup.log', 'a', encoding='utf-8') as f:
-               f.write('\n--- Startup error ---\n')
-               f.write(err)
-     except Exception:
-          # best-effort logging to stderr
-          print('Failed to write startup log', file=sys.stderr)
-     # fall back to an empty DataFrame so the app can still start and show an error in the UI
-     df = pd.DataFrame()
-
+    df = load_data()
+except Exception:
+    # keep a minimal empty DataFrame on error so Streamlit can start
+    df = pd.DataFrame()
 
 # Clean borough names to proper capitalization
 borough_mapping = {
-    'MANHATTAN': 'Manhattan',
-    'BROOKLYN': 'Brooklyn',
-    'QUEENS': 'Queens',
-    'BRONX': 'Bronx',
-    'STATEN ISLAND': 'Staten Island'
+     'MANHATTAN': 'Manhattan',
+     'BROOKLYN': 'Brooklyn',
+     'QUEENS': 'Queens',
+     'BRONX': 'Bronx',
+     'STATEN ISLAND': 'Staten Island'
 }
 
 if "BOROUGH" in df.columns:
-    df["BOROUGH"] = df["BOROUGH"].str.title().replace(borough_mapping)
-    df["BOROUGH"] = df["BOROUGH"].fillna("Unknown")
+     df["BOROUGH"] = df["BOROUGH"].str.title().replace(borough_mapping)
+     df["BOROUGH"] = df["BOROUGH"].fillna("Unknown")
 else:
-    df["BOROUGH"] = "Unknown"
+     df["BOROUGH"] = "Unknown"
 
 # Normalize and cast useful columns
 # Keep original columns but create convenient working columns
 # Some columns have spaces in names; use exact names from your message.
 # Convert crash datetime to datetime (coerce errors)
-df["CRASH_DATETIME"] = pd.to_datetime(df["CRASH_DATETIME"], errors="coerce")
+df["CRASH_DATETIME"] = pd.to_datetime(df.get("CRASH_DATETIME", pd.NaT), errors="coerce")
 # YEAR for slider and groupings
 df["YEAR"] = df["CRASH_DATETIME"].dt.year
 df["MONTH"] = df["CRASH_DATETIME"].dt.month
@@ -94,22 +103,22 @@ df["DAY_OF_WEEK"] = df["CRASH_DATETIME"].dt.day_name()
 
 # Cast numeric injury/killed counts to numeric (safe)
 num_cols = [
-     "NUMBER OF PERSONS INJURED", "NUMBER OF PERSONS KILLED",
-     "NUMBER OF PEDESTRIANS INJURED", "NUMBER OF PEDESTRIANS KILLED",
-     "NUMBER OF CYCLIST INJURED", "NUMBER OF CYCLIST KILLED",
-     "NUMBER OF MOTORIST INJURED", "NUMBER OF MOTORIST KILLED"
+    "NUMBER OF PERSONS INJURED", "NUMBER OF PERSONS KILLED",
+    "NUMBER OF PEDESTRIANS INJURED", "NUMBER OF PEDESTRIANS KILLED",
+    "NUMBER OF CYCLIST INJURED", "NUMBER OF CYCLIST KILLED",
+    "NUMBER OF MOTORIST INJURED", "NUMBER OF MOTORIST KILLED"
 ]
 for c in num_cols:
-     if c in df.columns:
-          df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
-     else:
-          df[c] = 0
+    if c in df.columns:
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+    else:
+        df[c] = 0
 
 # Helpful aggregated numeric columns
 df["TOTAL_INJURED"] = df[["NUMBER OF PERSONS INJURED",
-                         "NUMBER OF PEDESTRIANS INJURED",
-                         "NUMBER OF CYCLIST INJURED",
-                         "NUMBER OF MOTORIST INJURED"]].sum(axis=1)
+                          "NUMBER OF PEDESTRIANS INJURED",
+                          "NUMBER OF CYCLIST INJURED",
+                          "NUMBER OF MOTORIST INJURED"]].sum(axis=1)
 df["TOTAL_KILLED"] = df[["NUMBER OF PERSONS KILLED",
                          "NUMBER OF PEDESTRIANS KILLED",
                          "NUMBER OF CYCLIST KILLED",
@@ -120,14 +129,14 @@ df["SEVERITY_SCORE"] = (df["TOTAL_INJURED"] * 1 + df["TOTAL_KILLED"] * 5)
 
 # FULL_ADDRESS fallback
 if "FULL ADDRESS" not in df.columns:
-     df["FULL ADDRESS"] = df.get("ON STREET NAME", "").fillna("") + ", " + df.get("BOROUGH", "")
+    df["FULL ADDRESS"] = df.get("ON STREET NAME", "").fillna("") + ", " + df.get("BOROUGH", "")
 
 # Latitude / Longitude as numeric
 for coord in ("LATITUDE", "LONGITUDE"):
-     if coord in df.columns:
-          df[coord] = pd.to_numeric(df[coord], errors="coerce")
-     else:
-          df[coord] = np.nan
+    if coord in df.columns:
+        df[coord] = pd.to_numeric(df[coord], errors="coerce")
+    else:
+        df[coord] = np.nan
 
 # Parse ALL_VEHICLE_TYPES (which may be a string representation of a list) and create a flattened column
 def parse_vehicle_list(v):
@@ -185,8 +194,7 @@ else:
           if c in df.columns:
                parts.append(df[c].fillna("").astype(str))
      if parts:
-          df["FACTORS_LIST"] = (pd.Series([";".join(x) for x in zip(*parts)]) if parts else pd.Series([[]]*len(df))).apply(
-               lambda s: parse_factor_list(s))
+          df["FACTORS_LIST"] = (pd.Series([";".join(x) for x in zip(*parts)]) if parts else pd.Series([[]]*len(df))).apply(parse_factor_list)
      else:
           df["FACTORS_LIST"] = [[] for _ in range(len(df))]
 
@@ -195,14 +203,9 @@ factor_counts = pd.Series(all_factors_flat).value_counts()
 TOP_FACTORS = factor_counts.head(10).index.tolist()
 
 # PERSON_TYPE (type of persons involved)
-if "PERSON_TYPE" not in df.columns and "PERSON_TYPE" in df.columns:
-     pass
 # ensure PERSON_TYPE column exists
 if "PERSON_TYPE" not in df.columns:
-     if "PERSON_TYPE" in df.columns:
-          df["PERSON_TYPE"] = df["PERSON_TYPE"]
-     else:
-          df["PERSON_TYPE"] = df.get("PERSON_TYPE", "Unknown").fillna("Unknown")
+     df["PERSON_TYPE"] = df.get("PERSON_TYPE", "Unknown").fillna("Unknown")
 
 # POSITION_IN_VEHICLE_CLEAN is provided in dataset per your list, ensure it's present
 if "POSITION_IN_VEHICLE_CLEAN" not in df.columns:
@@ -210,21 +213,21 @@ if "POSITION_IN_VEHICLE_CLEAN" not in df.columns:
 
 # Ensure other person-related columns exist (for new plots)
 for col in ["PERSON_AGE", "PERSON_SEX", "BODILY_INJURY", "SAFETY_EQUIPMENT", "EMOTIONAL_STATUS", "UNIQUE_ID", "EJECTION", "ZIP CODE", "PERSON_INJURY"]:
-    if col not in df.columns:
-        # Create a placeholder column if not found (assuming person-level data is in the merged set)
-        if col == "UNIQUE_ID":
-            df[col] = df.index + 1
-        elif col == "PERSON_AGE":
-            df[col] = pd.to_numeric(df.get(col, np.nan), errors='coerce').fillna(0).astype(int) # Coerce age to int, fill missing/bad with 0
-        elif col in ["EJECTION", "ZIP CODE", "PERSON_INJURY"]:
-             df[col] = df.get(col, "Unknown").fillna("Unknown")
-        else:
-            df[col] = df.get(col, "Unknown").fillna("Unknown")
+     if col not in df.columns:
+          # Create a placeholder column if not found (assuming person-level data is in the merged set)
+          if col == "UNIQUE_ID":
+               df[col] = df.index + 1
+          elif col == "PERSON_AGE":
+               df[col] = pd.to_numeric(df.get(col, np.nan), errors='coerce').fillna(0).astype(int) # Coerce age to int, fill missing/bad with 0
+          elif col in ["EJECTION", "ZIP CODE", "PERSON_INJURY"]:
+               df[col] = df.get(col, "Unknown").fillna("Unknown")
+          else:
+               df[col] = df.get(col, "Unknown").fillna("Unknown")
 
 # Ensure additional columns exist
 for col in ["COMPLAINT", "VEHICLE TYPE CODE 1", "CONTRIBUTING FACTOR VEHICLE 1"]:
-    if col not in df.columns:
-        df[col] = "Unknown"
+     if col not in df.columns:
+          df[col] = "Unknown"
 
 # Small helper to add jitter to lat/lon to separate overlapping points
 def jitter_coords(series, scale=0.0006):
@@ -233,12 +236,12 @@ def jitter_coords(series, scale=0.0006):
 
 # Define consistent borough colors with proper capitalization
 BOROUGH_COLORS = {
-    'Manhattan': '#2ECC71',  # Green
-    'Brooklyn': '#E74C3C',   # Red
-    'Queens': '#3498DB',     # Blue
-    'Bronx': '#F39C12',      # Orange
-    'Staten Island': '#9B59B6', # Purple
-    'Unknown': '#95A5A6'     # Gray
+     'Manhattan': '#2ECC71',  # Green
+     'Brooklyn': '#E74C3C',   # Red
+     'Queens': '#3498DB',     # Blue
+     'Bronx': '#F39C12',      # Orange
+     'Staten Island': '#9B59B6', # Purple
+     'Unknown': '#95A5A6'     # Gray
 }
 
 # Year bounds used for UI controls — robustly derive from CRASH_DATETIME if YEAR missing
