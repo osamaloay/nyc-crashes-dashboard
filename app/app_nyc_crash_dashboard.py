@@ -1162,10 +1162,22 @@ if __name__ == "__main__":
 
      # Sidebar controls
      with st.sidebar:
-          st.header("Filters")
+          # Decorative header + quick style for sidebar
+          st.markdown(
+               """
+               <div style='padding:10px;border-radius:8px;background:linear-gradient(90deg,#ffe6f0,#fff0e6);'>
+                    <h2 style='margin:0; color:#2C3E50;'>🚦 NYC Crash Dashboard</h2>
+                    <div style='font-size:12px;color:#555;'>Interactive crash visualizations — sample and full load options</div>
+               </div>
+               """,
+               unsafe_allow_html=True,
+          )
+          st.markdown("---")
           st.markdown("Load data: choose a fast sample for interactive exploration or the full dataset (may be slow or exceed memory).")
           # Auto-update toggle and manual Generate button support
           auto_update = st.checkbox("Auto-update visuals", value=True, help="When enabled, charts update automatically when filters change. When disabled, click 'Generate Report' to update visuals.")
+          # Allow user to explicitly opt-in to a raw full load (dangerous on low-memory hosts)
+          allow_raw_full = st.checkbox("Allow raw full load (dangerous)", value=False, help="If checked, the app will attempt to load the entire Parquet file into memory. This may crash on Streamlit Cloud.")
           # Load dataset on demand to avoid import-time crashes on Streamlit Cloud
           if st.button("Load sample (fast)"):
                _df = load_data(full=False)
@@ -1180,7 +1192,19 @@ if __name__ == "__main__":
                          st.info("Data loaded. Please refresh the page to complete the load.")
 
           if st.button("Load full dataset (slow)"):
-               _df = load_data(full=True)
+               # Check file size and respect the 'allow_raw_full' override
+               try:
+                    size_bytes = os.path.getsize(PARQUET_PATH)
+                    size_mb = size_bytes / 1024 ** 2
+               except Exception:
+                    size_mb = 0
+
+               if size_mb > FULL_LOAD_SIZE_MB_THRESHOLD and not allow_raw_full:
+                    st.warning(f"Parquet file is large ({size_mb:.1f} MB). To avoid crashing, loading a sampled subset. Check 'Allow raw full load' to force load the full dataset (may crash).")
+                    _df = load_data(full=False)
+               else:
+                    _df = load_data(full=True)
+
                if not _df.empty:
                     st.session_state['df'] = _df
                     st.session_state['data_loaded'] = True
@@ -1188,6 +1212,15 @@ if __name__ == "__main__":
                          st.experimental_rerun()
                     else:
                          st.info("Full dataset loaded. Please refresh the page to complete the load.")
+
+          # Clear cached/session data button
+          if st.button("Clear loaded data"):
+               for k in ["df", "data_loaded"]:
+                    if k in st.session_state:
+                         del st.session_state[k]
+               st.success("Cleared loaded data from session. Refreshing UI...")
+               if hasattr(st, "experimental_rerun"):
+                    st.experimental_rerun()
 
           # Keep a session-backed `df` so data persists across reruns
           if 'df' in st.session_state:
