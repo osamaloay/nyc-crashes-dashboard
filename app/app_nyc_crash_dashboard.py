@@ -27,8 +27,22 @@ st.set_page_config(page_title="NYC Crash Dashboard", layout="wide")
 
 PARQUET_PATH = "nyc_crashes.parquet"
 
+# Read-time tuning
+MINIMAL_COLUMNS = [
+     "CRASH_DATETIME", "LATITUDE", "LONGITUDE", "BOROUGH",
+     "ALL_VEHICLE_TYPES", "ALL_CONTRIBUTING_FACTORS",
+     "NUMBER OF PERSONS INJURED", "NUMBER OF PERSONS KILLED",
+     "NUMBER OF PEDESTRIANS INJURED", "NUMBER OF PEDESTRIANS KILLED",
+     "NUMBER OF CYCLIST INJURED", "NUMBER OF CYCLIST KILLED",
+     "NUMBER OF MOTORIST INJURED", "NUMBER OF MOTORIST KILLED",
+     "ON STREET NAME", "CROSS STREET NAME", "ZIP CODE",
+     "PERSON_TYPE", "PERSON_AGE", "PERSON_SEX", "PERSON_INJURY"
+]
+# Maximum rows to keep for the fast sample path
+MAX_SAMPLE_ROWS = 50000
+
 @st.cache_data
-def load_data():
+def load_data(full: bool = False):
      # Parquet-only loader: read `nyc_crashes.parquet` if present. Return empty DataFrame on any failure.
      if not os.path.exists(PARQUET_PATH):
           st.error(f"Parquet dataset `{PARQUET_PATH}` not found in the repository.")
@@ -43,7 +57,32 @@ def load_data():
      except Exception:
           st.info(f"Found parquet `{PARQUET_PATH}`. Attempting to read...")
 
-     # Try pyarrow first (most common)
+     # Try a fast sample read first unless the user requested full load.
+     if not full:
+          try:
+               # Read only the minimal set of columns to speed things up. Determine available columns via pyarrow if possible.
+               available_cols = None
+               try:
+                    import pyarrow.parquet as pq
+                    available_cols = pq.ParquetFile(PARQUET_PATH).schema_arrow.names
+               except Exception:
+                    available_cols = None
+
+               cols_to_read = MINIMAL_COLUMNS
+               if available_cols is not None:
+                    cols_to_read = [c for c in MINIMAL_COLUMNS if c in available_cols]
+
+               df = pd.read_parquet(PARQUET_PATH, engine="pyarrow", columns=cols_to_read)
+               # If the file still returns many rows, downsample to keep memory low
+               if len(df) > MAX_SAMPLE_ROWS:
+                    df = df.sample(n=MAX_SAMPLE_ROWS, random_state=42)
+               st.success(f"Loaded sample ({len(df):,} rows) from Parquet (pyarrow, columns).")
+               return df
+          except Exception as e_sample:
+               st.warning("Fast sample read with pyarrow failed — will try full read or fastparquet fallback.")
+               st.exception(e_sample)
+
+     # Try pyarrow full read
      try:
           df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
           st.success(f"Loaded {len(df):,} rows from Parquet (pyarrow).")
@@ -959,11 +998,18 @@ if __name__ == "__main__":
      # Sidebar controls
      with st.sidebar:
           st.header("Filters")
+          st.markdown("Load data: choose a fast sample for interactive exploration or the full dataset (may be slow or exceed memory).")
           # Load dataset on demand to avoid import-time crashes on Streamlit Cloud
-          if st.button("Load dataset"):
-               _df = load_data()
+          if st.button("Load sample (fast)"):
+               _df = load_data(full=False)
                if not _df.empty:
                     # store loaded DataFrame into module-global `df` and rerun
+                    globals()['df'] = _df
+                    st.experimental_rerun()
+
+          if st.button("Load full dataset (slow)"):
+               _df = load_data(full=True)
+               if not _df.empty:
                     globals()['df'] = _df
                     st.experimental_rerun()
 
