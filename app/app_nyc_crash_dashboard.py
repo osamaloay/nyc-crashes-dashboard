@@ -1003,15 +1003,22 @@ if __name__ == "__main__":
           if st.button("Load sample (fast)"):
                _df = load_data(full=False)
                if not _df.empty:
-                    # store loaded DataFrame into module-global `df` and rerun
+                    # store loaded DataFrame into module-global `df`
                     globals()['df'] = _df
-                    st.experimental_rerun()
+                    # experimental_rerun may not exist on older Streamlit versions — guard it
+                    if hasattr(st, "experimental_rerun"):
+                         st.experimental_rerun()
+                    else:
+                         st.info("Data loaded. Please refresh the page to complete the load.")
 
           if st.button("Load full dataset (slow)"):
                _df = load_data(full=True)
                if not _df.empty:
                     globals()['df'] = _df
-                    st.experimental_rerun()
+                    if hasattr(st, "experimental_rerun"):
+                         st.experimental_rerun()
+                    else:
+                         st.info("Full dataset loaded. Please refresh the page to complete the load.")
 
           if df.empty:
                st.warning("Dataset not loaded. Click 'Load dataset' to load the CSV/parquet (may be large).")
