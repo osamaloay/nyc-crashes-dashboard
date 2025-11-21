@@ -45,6 +45,7 @@ MAX_SAMPLE_ROWS = 1_000_000
 FULL_LOAD_SIZE_MB_THRESHOLD = 150  # if file larger than this, avoid loading entirely into memory unchanged
 MAX_FULL_ROWS = 200000  # cap rows when user requests full load to avoid OOM
 MAX_COMPUTE_ROWS = 100000  # number of rows used for heavy plotting operations
+INCREMENTAL_CHUNK_ROWS = 200000  # rows per incremental load step
 
 @st.cache_data
 def load_data(full: bool = False):
@@ -359,123 +360,7 @@ else:
      df["BOROUGH"] = pd.Series([], dtype=object)
      df["YEAR"] = pd.Series([], dtype="float64")
 
-# Parse ALL_VEHICLE_TYPES (which may be a string representation of a list) and create a flattened column
-def parse_vehicle_list(v):
-     if pd.isna(v):
-          return []
-     # If it's already a Python list object (rare in CSV), handle
-     if isinstance(v, list):
-          return [str(x).strip() for x in v if str(x).strip()]
-     s = str(v).strip()
-     # Try literal_eval if it's like "['SUV/Station Wagon', 'Sedan']"
-     try:
-          parsed = ast.literal_eval(s)
-          if isinstance(parsed, (list, tuple)):
-               return [str(x).strip() for x in parsed if str(x).strip()]
-     except Exception:
-          # fallback: comma-separated
-          parts = [p.strip() for p in s.split(",") if p.strip()]
-          return parts
-     return []
-
-def parse_factor_list(v):
-     if pd.isna(v):
-          return []
-     if isinstance(v, list):
-          return [str(x).strip() for x in v if str(x).strip()]
-     s = str(v).strip()
-     try:
-          parsed = ast.literal_eval(s)
-          if isinstance(parsed, (list, tuple)):
-               return [str(x).strip() for x in parsed if str(x).strip()]
-     except Exception:
-          parts = [p.strip() for p in s.split(",") if p.strip()]
-          return parts
-     return []
-
-if not df.empty:
-     # Parse ALL_VEHICLE_TYPES (which may be a string representation of a list) and create a flattened column
-     df["VEHICLE_TYPES_LIST"] = df.get("ALL_VEHICLE_TYPES", "").apply(parse_vehicle_list)
-
-     # Expand vehicle types per row into a flat list column for easier counting
-     all_vehicle_types_flat = [vt for sub in df["VEHICLE_TYPES_LIST"] for vt in sub]
-     vehicle_type_counts = pd.Series(all_vehicle_types_flat).value_counts()
-     # Top 10 vehicle types for charts / heatmap combos
-     TOP_VEHICLE_TYPES = vehicle_type_counts.head(10).index.tolist()
-
-     # Try to handle both ALL_CONTRIBUTING_FACTORS and ALL_CONTRIBUTING_FACTORS_STR
-     if "ALL_CONTRIBUTING_FACTORS" in df.columns:
-          df["FACTORS_LIST"] = df["ALL_CONTRIBUTING_FACTORS"].apply(parse_factor_list)
-     elif "ALL_CONTRIBUTING_FACTORS_STR" in df.columns:
-          df["FACTORS_LIST"] = df["ALL_CONTRIBUTING_FACTORS_STR"].apply(parse_factor_list)
-     else:
-          # fallback to specific columns if provided
-          parts = []
-          for i in range(1, 4):
-               c = f"CONTRIBUTING FACTOR VEHICLE {i}"
-               if c in df.columns:
-                    parts.append(df[c].fillna("").astype(str))
-          if parts:
-               df["FACTORS_LIST"] = (pd.Series([";".join(x) for x in zip(*parts)]) if parts else pd.Series([[]]*len(df))).apply(parse_factor_list)
-          else:
-               df["FACTORS_LIST"] = [[] for _ in range(len(df))]
-
-     all_factors_flat = [f for sub in df["FACTORS_LIST"] for f in sub]
-     factor_counts = pd.Series(all_factors_flat).value_counts()
-     TOP_FACTORS = factor_counts.head(10).index.tolist()
-
-     # PERSON_TYPE (type of persons involved)
-     # ensure PERSON_TYPE column exists
-     if "PERSON_TYPE" not in df.columns:
-          df["PERSON_TYPE"] = df.get("PERSON_TYPE", "Unknown").fillna("Unknown")
-
-     # POSITION_IN_VEHICLE_CLEAN is provided in dataset per your list, ensure it's present
-     if "POSITION_IN_VEHICLE_CLEAN" not in df.columns:
-          df["POSITION_IN_VEHICLE_CLEAN"] = df.get("POSITION_IN_VEHICLE_CLEAN", "").fillna("Unknown")
-
-     # Ensure other person-related columns exist (for new plots)
-     for col in ["PERSON_AGE", "PERSON_SEX", "BODILY_INJURY", "SAFETY_EQUIPMENT", "EMOTIONAL_STATUS", "UNIQUE_ID", "EJECTION", "ZIP CODE", "PERSON_INJURY"]:
-          if col not in df.columns:
-               # Create a placeholder column if not found (assuming person-level data is in the merged set)
-               if col == "UNIQUE_ID":
-                    df[col] = df.index + 1
-               elif col == "PERSON_AGE":
-                    df[col] = pd.to_numeric(df.get(col, np.nan), errors='coerce').fillna(0).astype(int) # Coerce age to int, fill missing/bad with 0
-               elif col in ["EJECTION", "ZIP CODE", "PERSON_INJURY"]:
-                    df[col] = df.get(col, "Unknown").fillna("Unknown")
-               else:
-                    df[col] = df.get(col, "Unknown").fillna("Unknown")
-
-     # Ensure additional columns exist
-     for col in ["COMPLAINT", "VEHICLE TYPE CODE 1", "CONTRIBUTING FACTOR VEHICLE 1"]:
-          if col not in df.columns:
-               df[col] = "Unknown"
-else:
-     # safe defaults when no data is loaded yet
-     df["VEHICLE_TYPES_LIST"] = pd.Series([[] for _ in range(len(df))])
-     TOP_VEHICLE_TYPES = []
-     df["FACTORS_LIST"] = pd.Series([[] for _ in range(len(df))])
-     TOP_FACTORS = []
-     df["PERSON_TYPE"] = pd.Series([], dtype=object)
-     df["POSITION_IN_VEHICLE_CLEAN"] = pd.Series([], dtype=object)
-     for col in ["PERSON_AGE", "PERSON_SEX", "BODILY_INJURY", "SAFETY_EQUIPMENT", "EMOTIONAL_STATUS", "UNIQUE_ID", "EJECTION", "ZIP CODE", "PERSON_INJURY", "COMPLAINT", "VEHICLE TYPE CODE 1", "CONTRIBUTING FACTOR VEHICLE 1"]:
-          if col not in df.columns:
-               df[col] = pd.Series([], dtype=object)
-
-# Small helper to add jitter to lat/lon to separate overlapping points
-def jitter_coords(series, scale=0.0006):
-     # scale tuned for city-level jitter
-     return series + np.random.normal(loc=0, scale=scale, size=series.shape)
-
-# Define consistent borough colors with proper capitalization
-BOROUGH_COLORS = {
-     'Manhattan': '#2ECC71',  # Green
-     'Brooklyn': '#E74C3C',   # Red
-     'Queens': '#3498DB',     # Blue
-     'Bronx': '#F39C12',      # Orange
-     'Staten Island': '#9B59B6', # Purple
-     'Unknown': '#95A5A6'     # Gray
-}
+          
 
 # Year bounds used for UI controls — robustly derive from CRASH_DATETIME if YEAR missing
 if "YEAR" not in df.columns or df["YEAR"].isna().all():
@@ -1235,6 +1120,20 @@ if __name__ == "__main__":
                     else:
                          st.info("Full dataset loaded. Please refresh the page to complete the load.")
 
+               # Incremental load in chunks to avoid OOM (processes one chunk per rerun)
+               if st.button(f"Incremental load ({INCREMENTAL_CHUNK_ROWS:,} rows / step)"):
+                    # initialize incremental loader state
+                    st.session_state['incremental_next_rg'] = 0
+                    st.session_state['incremental_chunk_rows'] = INCREMENTAL_CHUNK_ROWS
+                    st.session_state['incremental_running'] = True
+                    # ensure session df exists
+                    if 'df' not in st.session_state:
+                         st.session_state['df'] = pd.DataFrame()
+                    if hasattr(st, "experimental_rerun"):
+                         st.experimental_rerun()
+                    else:
+                         st.info("Started incremental load. Please refresh to continue.")
+
           # Clear cached/session data button
           if st.button("Clear loaded data"):
                for k in ["df", "data_loaded"]:
@@ -1247,6 +1146,100 @@ if __name__ == "__main__":
           # Keep a session-backed `df` so data persists across reruns
           if 'df' in st.session_state:
                df = st.session_state['df']
+
+          # If incremental loading is active, perform one chunk read (one step) per run
+          if st.session_state.get('incremental_running'):
+               try:
+                    import pyarrow.parquet as pq
+                    pqf = pq.ParquetFile(PARQUET_PATH)
+                    num_rg = pqf.num_row_groups
+                    start_rg = int(st.session_state.get('incremental_next_rg', 0))
+                    chunk_target = int(st.session_state.get('incremental_chunk_rows', INCREMENTAL_CHUNK_ROWS))
+
+                    acc = []
+                    got = 0
+                    rg = start_rg
+                    while rg < num_rg and got < chunk_target:
+                         try:
+                              tbl = pqf.read_row_group(rg)
+                              df_rg = tbl.to_pandas()
+                         except Exception:
+                              rg += 1
+                              continue
+                         acc.append(df_rg)
+                         got += len(df_rg)
+                         rg += 1
+
+                    if acc:
+                         chunk_df = pd.concat(acc, ignore_index=True)
+                         # Minimal per-chunk postprocessing
+                         try:
+                              if 'BOROUGH' in chunk_df.columns:
+                                   chunk_df['BOROUGH'] = chunk_df['BOROUGH'].astype(str).str.title().replace(borough_mapping).fillna('Unknown')
+                              else:
+                                   chunk_df['BOROUGH'] = 'Unknown'
+                              chunk_df['CRASH_DATETIME'] = pd.to_datetime(chunk_df.get('CRASH_DATETIME', pd.NaT), errors='coerce')
+                              chunk_df['YEAR'] = chunk_df['CRASH_DATETIME'].dt.year
+                              num_cols = [
+                                   'NUMBER OF PERSONS INJURED','NUMBER OF PERSONS KILLED',
+                                   'NUMBER OF PEDESTRIANS INJURED','NUMBER OF PEDESTRIANS KILLED',
+                                   'NUMBER OF CYCLIST INJURED','NUMBER OF CYCLIST KILLED',
+                                   'NUMBER OF MOTORIST INJURED','NUMBER OF MOTORIST KILLED'
+                              ]
+                              for c in num_cols:
+                                   if c in chunk_df.columns:
+                                        chunk_df[c] = pd.to_numeric(chunk_df[c], errors='coerce').fillna(0).astype(int)
+                                   else:
+                                        chunk_df[c] = 0
+                              chunk_df['TOTAL_INJURED'] = chunk_df[[
+                                   'NUMBER OF PERSONS INJURED','NUMBER OF PEDESTRIANS INJURED','NUMBER OF CYCLIST INJURED','NUMBER OF MOTORIST INJURED'
+                              ]].sum(axis=1)
+                              chunk_df['TOTAL_KILLED'] = chunk_df[[
+                                   'NUMBER OF PERSONS KILLED','NUMBER OF PEDESTRIANS KILLED','NUMBER OF CYCLIST KILLED','NUMBER OF MOTORIST KILLED'
+                              ]].sum(axis=1)
+                              chunk_df['SEVERITY_SCORE'] = chunk_df['TOTAL_INJURED'] * 1 + chunk_df['TOTAL_KILLED'] * 5
+                              for coord in ('LATITUDE','LONGITUDE'):
+                                   if coord in chunk_df.columns:
+                                        chunk_df[coord] = pd.to_numeric(chunk_df[coord], errors='coerce')
+                                   else:
+                                        chunk_df[coord] = np.nan
+                              chunk_df['VEHICLE_TYPES_LIST'] = chunk_df.get('ALL_VEHICLE_TYPES', pd.Series([[]]*len(chunk_df))).apply(parse_vehicle_list)
+                              if 'ALL_CONTRIBUTING_FACTORS' in chunk_df.columns:
+                                   chunk_df['FACTORS_LIST'] = chunk_df['ALL_CONTRIBUTING_FACTORS'].apply(parse_factor_list)
+                              else:
+                                   chunk_df['FACTORS_LIST'] = pd.Series([[] for _ in range(len(chunk_df))])
+                              existing_len = len(st.session_state.get('df', pd.DataFrame()))
+                              chunk_df['UNIQUE_ID'] = range(existing_len + 1, existing_len + 1 + len(chunk_df))
+                              # Drop rows containing 'unknown' in any string column per user's request
+                              try:
+                                   string_cols = chunk_df.select_dtypes(include=['object','string']).columns.tolist()
+                                   if string_cols:
+                                        unk_mask = chunk_df[string_cols].apply(lambda s: s.fillna('').astype(str).str.strip().str.lower().str.contains('unknown'))
+                                        rows_with_unk = unk_mask.any(axis=1)
+                                        chunk_df = chunk_df.loc[~rows_with_unk].reset_index(drop=True)
+                              except Exception:
+                                   pass
+                         except Exception:
+                              pass
+
+                         # Append to session df
+                         session_df = st.session_state.get('df', pd.DataFrame())
+                         if session_df is None or session_df.empty:
+                              st.session_state['df'] = chunk_df
+                              df = st.session_state['df']
+                         else:
+                              st.session_state['df'] = pd.concat([session_df, chunk_df], ignore_index=True)
+                              df = st.session_state['df']
+
+                    st.session_state['incremental_next_rg'] = rg
+                    if rg >= num_rg:
+                         st.session_state['incremental_running'] = False
+                         st.success(f"Incremental load complete ({len(st.session_state.get('df', [])):,} rows loaded).")
+                    else:
+                         if hasattr(st, 'experimental_rerun'):
+                              st.experimental_rerun()
+               except Exception as ie:
+                    st.error(f"Incremental load failed: {ie}")
 
           if df.empty:
                st.warning("Dataset not loaded. Click 'Load dataset' to load the CSV/parquet (may be large).")
