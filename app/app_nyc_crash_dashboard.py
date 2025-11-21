@@ -57,6 +57,132 @@ def load_data(full: bool = False):
      except Exception:
           st.info(f"Found parquet `{PARQUET_PATH}`. Attempting to read...")
 
+     # Local helper: post-process loaded DataFrame so downstream code can assume derived columns exist
+     def _postprocess(df_loaded: pd.DataFrame) -> pd.DataFrame:
+          # Normalize BOROUGH
+          if "BOROUGH" in df_loaded.columns:
+               df_loaded["BOROUGH"] = df_loaded["BOROUGH"].astype(str).str.title().replace(borough_mapping)
+               df_loaded["BOROUGH"] = df_loaded["BOROUGH"].fillna("Unknown")
+          else:
+               df_loaded["BOROUGH"] = "Unknown"
+
+          # CRASH_DATETIME -> YEAR, MONTH, HOUR, DAY_OF_WEEK
+          df_loaded["CRASH_DATETIME"] = pd.to_datetime(df_loaded.get("CRASH_DATETIME", pd.NaT), errors="coerce")
+          df_loaded["YEAR"] = df_loaded["CRASH_DATETIME"].dt.year
+          df_loaded["MONTH"] = df_loaded["CRASH_DATETIME"].dt.month
+          df_loaded["HOUR"] = df_loaded["CRASH_DATETIME"].dt.hour
+          df_loaded["DAY_OF_WEEK"] = df_loaded["CRASH_DATETIME"].dt.day_name()
+
+          # Ensure numeric injury/killed counts exist
+          num_cols = [
+               "NUMBER OF PERSONS INJURED", "NUMBER OF PERSONS KILLED",
+               "NUMBER OF PEDESTRIANS INJURED", "NUMBER OF PEDESTRIANS KILLED",
+               "NUMBER OF CYCLIST INJURED", "NUMBER OF CYCLIST KILLED",
+               "NUMBER OF MOTORIST INJURED", "NUMBER OF MOTORIST KILLED"
+          ]
+          for c in num_cols:
+               if c in df_loaded.columns:
+                    df_loaded[c] = pd.to_numeric(df_loaded[c], errors="coerce").fillna(0).astype(int)
+               else:
+                    df_loaded[c] = 0
+
+          # Aggregated columns
+          df_loaded["TOTAL_INJURED"] = df_loaded[[
+               "NUMBER OF PERSONS INJURED",
+               "NUMBER OF PEDESTRIANS INJURED",
+               "NUMBER OF CYCLIST INJURED",
+               "NUMBER OF MOTORIST INJURED"
+          ]].sum(axis=1)
+          df_loaded["TOTAL_KILLED"] = df_loaded[[
+               "NUMBER OF PERSONS KILLED",
+               "NUMBER OF PEDESTRIANS KILLED",
+               "NUMBER OF CYCLIST KILLED",
+               "NUMBER OF MOTORIST KILLED"
+          ]].sum(axis=1)
+
+          # Severity score
+          df_loaded["SEVERITY_SCORE"] = (df_loaded["TOTAL_INJURED"] * 1 + df_loaded["TOTAL_KILLED"] * 5)
+
+          # FULL_ADDRESS fallback
+          if "FULL ADDRESS" not in df_loaded.columns:
+               df_loaded["FULL ADDRESS"] = df_loaded.get("ON STREET NAME", "").fillna("") + ", " + df_loaded.get("BOROUGH", "")
+
+          # Lat/Lon numeric
+          for coord in ("LATITUDE", "LONGITUDE"):
+               if coord in df_loaded.columns:
+                    df_loaded[coord] = pd.to_numeric(df_loaded[coord], errors="coerce")
+               else:
+                    df_loaded[coord] = np.nan
+
+          # Parse vehicle lists (simple parser local to loader)
+          def _parse_list_field(v):
+               if pd.isna(v):
+                    return []
+               if isinstance(v, list):
+                    return [str(x).strip() for x in v if str(x).strip()]
+               s = str(v).strip()
+               try:
+                    parsed = ast.literal_eval(s)
+                    if isinstance(parsed, (list, tuple)):
+                         return [str(x).strip() for x in parsed if str(x).strip()]
+               except Exception:
+                    pass
+               return [p.strip() for p in s.split(",") if p.strip()]
+
+          # VEHICLE_TYPES_LIST
+          if "ALL_VEHICLE_TYPES" in df_loaded.columns:
+               df_loaded["VEHICLE_TYPES_LIST"] = df_loaded["ALL_VEHICLE_TYPES"].apply(_parse_list_field)
+          else:
+               df_loaded["VEHICLE_TYPES_LIST"] = [[] for _ in range(len(df_loaded))]
+
+          # TOP_VEHICLE_TYPES
+          all_vehicle_types_flat = [vt for sub in df_loaded["VEHICLE_TYPES_LIST"] for vt in sub]
+          vehicle_type_counts = pd.Series(all_vehicle_types_flat).value_counts() if all_vehicle_types_flat else pd.Series([], dtype=object)
+          globals()["TOP_VEHICLE_TYPES"] = vehicle_type_counts.head(10).index.tolist() if not vehicle_type_counts.empty else []
+
+          # FACTORS_LIST
+          if "ALL_CONTRIBUTING_FACTORS" in df_loaded.columns:
+               df_loaded["FACTORS_LIST"] = df_loaded["ALL_CONTRIBUTING_FACTORS"].apply(_parse_list_field)
+          elif "ALL_CONTRIBUTING_FACTORS_STR" in df_loaded.columns:
+               df_loaded["FACTORS_LIST"] = df_loaded["ALL_CONTRIBUTING_FACTORS_STR"].apply(_parse_list_field)
+          else:
+               df_loaded["FACTORS_LIST"] = [[] for _ in range(len(df_loaded))]
+
+          all_factors_flat = [f for sub in df_loaded["FACTORS_LIST"] for f in sub]
+          factor_counts = pd.Series(all_factors_flat).value_counts() if all_factors_flat else pd.Series([], dtype=object)
+          globals()["TOP_FACTORS"] = factor_counts.head(10).index.tolist() if not factor_counts.empty else []
+
+          # Ensure person-related columns exist
+          for col in ["PERSON_TYPE", "POSITION_IN_VEHICLE_CLEAN", "PERSON_AGE", "PERSON_SEX", "BODILY_INJURY", "SAFETY_EQUIPMENT", "EMOTIONAL_STATUS", "UNIQUE_ID", "EJECTION", "ZIP CODE", "PERSON_INJURY"]:
+               if col not in df_loaded.columns:
+                    if col == "UNIQUE_ID":
+                         df_loaded[col] = df_loaded.index + 1
+                    elif col == "PERSON_AGE":
+                         df_loaded[col] = pd.to_numeric(df_loaded.get(col, np.nan), errors='coerce').fillna(0).astype(int)
+                    elif col in ["EJECTION", "ZIP CODE", "PERSON_INJURY"]:
+                         df_loaded[col] = df_loaded.get(col, "Unknown").fillna("Unknown")
+                    else:
+                         df_loaded[col] = df_loaded.get(col, "Unknown").fillna("Unknown")
+
+          # Ensure additional columns exist
+          for col in ["COMPLAINT", "VEHICLE TYPE CODE 1", "CONTRIBUTING FACTOR VEHICLE 1"]:
+               if col not in df_loaded.columns:
+                    df_loaded[col] = "Unknown"
+
+          # Update year bounds globals
+          try:
+               if not df_loaded["YEAR"].isna().all():
+                    globals()["min_year"] = int(df_loaded["YEAR"].min())
+                    globals()["max_year"] = int(df_loaded["YEAR"].max())
+               else:
+                    globals()["min_year"] = 2010
+                    globals()["max_year"] = pd.Timestamp.now().year
+          except Exception:
+               globals()["min_year"] = 2010
+               globals()["max_year"] = pd.Timestamp.now().year
+
+          return df_loaded
+
      # Try a fast sample read first unless the user requested full load.
      if not full:
           try:
@@ -76,6 +202,7 @@ def load_data(full: bool = False):
                # If the file still returns many rows, downsample to keep memory low
                if len(df) > MAX_SAMPLE_ROWS:
                     df = df.sample(n=MAX_SAMPLE_ROWS, random_state=42)
+               df = _postprocess(df)
                st.success(f"Loaded sample ({len(df):,} rows) from Parquet (pyarrow, columns).")
                return df
           except Exception as e_sample:
@@ -85,6 +212,7 @@ def load_data(full: bool = False):
      # Try pyarrow full read
      try:
           df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+          df = _postprocess(df)
           st.success(f"Loaded {len(df):,} rows from Parquet (pyarrow).")
           return df
      except Exception as e_py:
@@ -96,6 +224,7 @@ def load_data(full: bool = False):
           import fastparquet  # type: ignore
           try:
                df = pd.read_parquet(PARQUET_PATH, engine="fastparquet")
+               df = _postprocess(df)
                st.success(f"Loaded {len(df):,} rows from Parquet (fastparquet).")
                return df
           except Exception as e_fp:
