@@ -9,27 +9,16 @@ Original file is located at
 
 
 # app_nyc_crash_dashboard.py
-import pandas as pd
-from sqlalchemy import create_engine
 import ast
-import numpy as np
+import os
+import re
 import pandas as pd
-# Dash removed: converting layout to Streamlit components
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import re
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
 import plotly.figure_factory as ff
-import sqlite3
-import os
-from sqlalchemy import inspect
+from sklearn.cluster import KMeans
 import streamlit as st
-import pandas as pd
-import numpy as np
-import streamlit as st
-import sqlite3
-import os
 
 # -----------------------------
 # Streamlit Page Settings
