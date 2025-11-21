@@ -40,6 +40,10 @@ MINIMAL_COLUMNS = [
 ]
 # Maximum rows to keep for the fast sample path
 MAX_SAMPLE_ROWS = 50000
+# Safety limits for full reads and compute
+FULL_LOAD_SIZE_MB_THRESHOLD = 150  # if file larger than this, avoid loading entirely into memory unchanged
+MAX_FULL_ROWS = 200000  # cap rows when user requests full load to avoid OOM
+MAX_COMPUTE_ROWS = 100000  # number of rows used for heavy plotting operations
 
 @st.cache_data
 def load_data(full: bool = False):
@@ -153,6 +157,22 @@ def load_data(full: bool = False):
           all_factors_flat = [f for sub in df_loaded["FACTORS_LIST"] for f in sub]
           factor_counts = pd.Series(all_factors_flat).value_counts() if all_factors_flat else pd.Series([], dtype=object)
           globals()["TOP_FACTORS"] = factor_counts.head(10).index.tolist() if not factor_counts.empty else []
+
+          # Trim excessive 'Unknown' entries in string columns to reduce clutter
+          def _clean_unknowns(series, keep_top=1000):
+               if series.dtype == object or pd.api.types.is_string_dtype(series):
+                    # Replace very long or empty strings
+                    s = series.fillna('Unknown').astype(str)
+                    # Keep common values, map rare/unknown to 'Other' to reduce option explosion
+                    counts = s.value_counts()
+                    allowed = set(counts.head(keep_top).index.tolist())
+                    return s.apply(lambda x: x if (x in allowed and x != 'Unknown') else ('Other' if x not in allowed else 'Unknown'))
+               return series
+
+          # Apply trimming to a few high-cardinality columns
+          for col in ["ON STREET NAME", "CROSS STREET NAME", "COMPLAINT", "VEHICLE TYPE CODE 1"]:
+               if col in df_loaded.columns:
+                    df_loaded[col] = _clean_unknowns(df_loaded[col], keep_top=500)
 
           # Ensure person-related columns exist. Create proper Series for missing columns
           person_cols = ["PERSON_TYPE", "POSITION_IN_VEHICLE_CLEAN", "PERSON_AGE", "PERSON_SEX", "BODILY_INJURY", "SAFETY_EQUIPMENT", "EMOTIONAL_STATUS", "UNIQUE_ID", "EJECTION", "ZIP CODE", "PERSON_INJURY"]
@@ -673,6 +693,12 @@ def compute_figures(year_range=None, boroughs=None, vehicles=None, factors=None,
      MAX_DENSITY_POINTS = 5000
      MAX_KMEANS_SAMPLE = 1000
      MAX_VEHICLE_LISTS = 10000
+     # Use a reduced DataFrame for heavy plotting to avoid memory blowups
+     plot_sample_n = min(len(dff), MAX_COMPUTE_ROWS)
+     try:
+          dff_plot = dff.sample(n=plot_sample_n, random_state=42) if plot_sample_n < len(dff) else dff
+     except Exception:
+          dff_plot = dff.head(plot_sample_n)
 
      # Vibrant color sequence for line charts
      vibrant_colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9']
@@ -688,14 +714,13 @@ def compute_figures(year_range=None, boroughs=None, vehicles=None, factors=None,
      fig_inj_borough.update_traces(textposition="outside")
      fig_inj_borough.update_layout(margin=dict(t=40, b=20), template=pink_template, showlegend=False)
 
-     # 2) Crashes by Contributing Factor - Purple shades
-     factor_rows = []
-     for _, row in dff.iterrows():
-          for f in row["FACTORS_LIST"]:
-               factor_rows.append((f, row["UNIQUE_ID"] if "UNIQUE_ID" in row else 1))
-     factor_df = pd.DataFrame(factor_rows, columns=["Factor", "UID"]) if factor_rows else pd.DataFrame(columns=["Factor", "UID"])
-     factor_counts_df = factor_df["Factor"].value_counts().head(15).reset_index()
-     factor_counts_df.columns = ["Factor", "Count"]
+     # 2) Crashes by Contributing Factor - Purple shades (use sampled/efficient explode)
+     if not dff_plot.empty and "FACTORS_LIST" in dff_plot.columns:
+          factor_df = dff_plot[["UNIQUE_ID", "FACTORS_LIST"]].explode("FACTORS_LIST")
+          factor_counts_df = factor_df["FACTORS_LIST"].value_counts().head(15).reset_index()
+          factor_counts_df.columns = ["Factor", "Count"]
+     else:
+          factor_counts_df = pd.DataFrame(columns=["Factor", "Count"])
      fig_factor = px.bar(factor_counts_df, x="Count", y="Factor", orientation="h",
                          labels={"Count": "Number of Crashes", "Factor": "Contributing Factor"},
                          color="Count",
@@ -712,8 +737,8 @@ def compute_figures(year_range=None, boroughs=None, vehicles=None, factors=None,
           fig_year = go.Figure()
           fig_year.update_layout(title="Crashes per Year (no data for selection)")
 
-     # 4) Crash locations points map - Consistent borough colors
-     df_map = dff.dropna(subset=["LATITUDE", "LONGITUDE"]).copy()
+     # 4) Crash locations points map - Consistent borough colors (use sampled plot df)
+     df_map = dff_plot.dropna(subset=["LATITUDE", "LONGITUDE"]).copy()
      if not df_map.empty:
           # sample for plotting to keep browser responsive
           if len(df_map) > MAX_MAP_POINTS:
@@ -745,7 +770,7 @@ def compute_figures(year_range=None, boroughs=None, vehicles=None, factors=None,
      fig_gender.update_layout(margin=dict(t=40, b=20), template=pink_template)
 
      # 6) Safety Equipment Usage (Top 5)
-     safety_dist = dff.groupby("SAFETY_EQUIPMENT")["UNIQUE_ID"].count().reset_index(name="Count")
+     safety_dist = dff_plot.groupby("SAFETY_EQUIPMENT")["UNIQUE_ID"].count().reset_index(name="Count")
      safety_dist = safety_dist.sort_values("Count", ascending=False).head(5)
      fig_safety = px.pie(safety_dist, names="SAFETY_EQUIPMENT", values="Count",
                          labels={"SAFETY_EQUIPMENT": "Safety Equipment", "Count": "Number of Records"},
@@ -760,9 +785,9 @@ def compute_figures(year_range=None, boroughs=None, vehicles=None, factors=None,
                              color_discrete_sequence=['#FF8DA1'])
      fig_emotional.update_layout(margin=dict(t=40, b=20), xaxis={'categoryorder':'total descending'}, template=pink_template, showlegend=False)
 
-     # 8) Age Distribution with Marginal Box Plot
-     dff["PERSON_AGE"] = pd.to_numeric(dff["PERSON_AGE"], errors='coerce')
-     fig_age_hist = px.histogram(dff, x="PERSON_AGE", nbins=30,
+     # 8) Age Distribution with Marginal Box Plot (use sampled data)
+     dff_plot["PERSON_AGE"] = pd.to_numeric(dff_plot["PERSON_AGE"], errors='coerce')
+     fig_age_hist = px.histogram(dff_plot, x="PERSON_AGE", nbins=30,
                            marginal="box",
                            hover_data=["PERSON_AGE"],
                            color_discrete_sequence=['#FF6B6B'])
@@ -773,9 +798,9 @@ def compute_figures(year_range=None, boroughs=None, vehicles=None, factors=None,
          template=pink_template
      )
 
-     # 9) Injuries by Person Type Over Time
+     # 9) Injuries by Person Type Over Time (use aggregated full data but limit groups)
      person_type_time = dff.groupby(["YEAR", "PERSON_TYPE"]).agg({
-         "TOTAL_INJURED": "sum"
+          "TOTAL_INJURED": "sum"
      }).reset_index()
      fig_person_time = px.bar(person_type_time, x="YEAR", y="TOTAL_INJURED", color="PERSON_TYPE",
                              barmode="stack",
