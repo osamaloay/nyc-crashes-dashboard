@@ -1,0 +1,1 @@
+web: gunicorn app_nyc_crash_dashboard:server
