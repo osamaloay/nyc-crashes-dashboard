@@ -132,15 +132,6 @@ def parse_vehicle_list(v):
           return parts
      return []
 
-df["VEHICLE_TYPES_LIST"] = df.get("ALL_VEHICLE_TYPES", "").apply(parse_vehicle_list)
-
-# Expand vehicle types per row into a flat list column for easier counting
-all_vehicle_types_flat = [vt for sub in df["VEHICLE_TYPES_LIST"] for vt in sub]
-vehicle_type_counts = pd.Series(all_vehicle_types_flat).value_counts()
-# Top 10 vehicle types for charts / heatmap combos
-TOP_VEHICLE_TYPES = vehicle_type_counts.head(10).index.tolist()
-
-# Parse contributing factors (all contributing factors column may be a list or string)
 def parse_factor_list(v):
      if pd.isna(v):
           return []
@@ -156,53 +147,74 @@ def parse_factor_list(v):
           return parts
      return []
 
-# Try to handle both ALL_CONTRIBUTING_FACTORS and ALL_CONTRIBUTING_FACTORS_STR
-if "ALL_CONTRIBUTING_FACTORS" in df.columns:
-     df["FACTORS_LIST"] = df["ALL_CONTRIBUTING_FACTORS"].apply(parse_factor_list)
-elif "ALL_CONTRIBUTING_FACTORS_STR" in df.columns:
-     df["FACTORS_LIST"] = df["ALL_CONTRIBUTING_FACTORS_STR"].apply(parse_factor_list)
-else:
-     # fallback to specific columns if provided
-     parts = []
-     for i in range(1, 4):
-          c = f"CONTRIBUTING FACTOR VEHICLE {i}"
-          if c in df.columns:
-               parts.append(df[c].fillna("").astype(str))
-     if parts:
-          df["FACTORS_LIST"] = (pd.Series([";".join(x) for x in zip(*parts)]) if parts else pd.Series([[]]*len(df))).apply(parse_factor_list)
+if not df.empty:
+     # Parse ALL_VEHICLE_TYPES (which may be a string representation of a list) and create a flattened column
+     df["VEHICLE_TYPES_LIST"] = df.get("ALL_VEHICLE_TYPES", "").apply(parse_vehicle_list)
+
+     # Expand vehicle types per row into a flat list column for easier counting
+     all_vehicle_types_flat = [vt for sub in df["VEHICLE_TYPES_LIST"] for vt in sub]
+     vehicle_type_counts = pd.Series(all_vehicle_types_flat).value_counts()
+     # Top 10 vehicle types for charts / heatmap combos
+     TOP_VEHICLE_TYPES = vehicle_type_counts.head(10).index.tolist()
+
+     # Try to handle both ALL_CONTRIBUTING_FACTORS and ALL_CONTRIBUTING_FACTORS_STR
+     if "ALL_CONTRIBUTING_FACTORS" in df.columns:
+          df["FACTORS_LIST"] = df["ALL_CONTRIBUTING_FACTORS"].apply(parse_factor_list)
+     elif "ALL_CONTRIBUTING_FACTORS_STR" in df.columns:
+          df["FACTORS_LIST"] = df["ALL_CONTRIBUTING_FACTORS_STR"].apply(parse_factor_list)
      else:
-          df["FACTORS_LIST"] = [[] for _ in range(len(df))]
-
-all_factors_flat = [f for sub in df["FACTORS_LIST"] for f in sub]
-factor_counts = pd.Series(all_factors_flat).value_counts()
-TOP_FACTORS = factor_counts.head(10).index.tolist()
-
-# PERSON_TYPE (type of persons involved)
-# ensure PERSON_TYPE column exists
-if "PERSON_TYPE" not in df.columns:
-     df["PERSON_TYPE"] = df.get("PERSON_TYPE", "Unknown").fillna("Unknown")
-
-# POSITION_IN_VEHICLE_CLEAN is provided in dataset per your list, ensure it's present
-if "POSITION_IN_VEHICLE_CLEAN" not in df.columns:
-     df["POSITION_IN_VEHICLE_CLEAN"] = df.get("POSITION_IN_VEHICLE_CLEAN", "").fillna("Unknown")
-
-# Ensure other person-related columns exist (for new plots)
-for col in ["PERSON_AGE", "PERSON_SEX", "BODILY_INJURY", "SAFETY_EQUIPMENT", "EMOTIONAL_STATUS", "UNIQUE_ID", "EJECTION", "ZIP CODE", "PERSON_INJURY"]:
-     if col not in df.columns:
-          # Create a placeholder column if not found (assuming person-level data is in the merged set)
-          if col == "UNIQUE_ID":
-               df[col] = df.index + 1
-          elif col == "PERSON_AGE":
-               df[col] = pd.to_numeric(df.get(col, np.nan), errors='coerce').fillna(0).astype(int) # Coerce age to int, fill missing/bad with 0
-          elif col in ["EJECTION", "ZIP CODE", "PERSON_INJURY"]:
-               df[col] = df.get(col, "Unknown").fillna("Unknown")
+          # fallback to specific columns if provided
+          parts = []
+          for i in range(1, 4):
+               c = f"CONTRIBUTING FACTOR VEHICLE {i}"
+               if c in df.columns:
+                    parts.append(df[c].fillna("").astype(str))
+          if parts:
+               df["FACTORS_LIST"] = (pd.Series([";".join(x) for x in zip(*parts)]) if parts else pd.Series([[]]*len(df))).apply(parse_factor_list)
           else:
-               df[col] = df.get(col, "Unknown").fillna("Unknown")
+               df["FACTORS_LIST"] = [[] for _ in range(len(df))]
 
-# Ensure additional columns exist
-for col in ["COMPLAINT", "VEHICLE TYPE CODE 1", "CONTRIBUTING FACTOR VEHICLE 1"]:
-     if col not in df.columns:
-          df[col] = "Unknown"
+     all_factors_flat = [f for sub in df["FACTORS_LIST"] for f in sub]
+     factor_counts = pd.Series(all_factors_flat).value_counts()
+     TOP_FACTORS = factor_counts.head(10).index.tolist()
+
+     # PERSON_TYPE (type of persons involved)
+     # ensure PERSON_TYPE column exists
+     if "PERSON_TYPE" not in df.columns:
+          df["PERSON_TYPE"] = df.get("PERSON_TYPE", "Unknown").fillna("Unknown")
+
+     # POSITION_IN_VEHICLE_CLEAN is provided in dataset per your list, ensure it's present
+     if "POSITION_IN_VEHICLE_CLEAN" not in df.columns:
+          df["POSITION_IN_VEHICLE_CLEAN"] = df.get("POSITION_IN_VEHICLE_CLEAN", "").fillna("Unknown")
+
+     # Ensure other person-related columns exist (for new plots)
+     for col in ["PERSON_AGE", "PERSON_SEX", "BODILY_INJURY", "SAFETY_EQUIPMENT", "EMOTIONAL_STATUS", "UNIQUE_ID", "EJECTION", "ZIP CODE", "PERSON_INJURY"]:
+          if col not in df.columns:
+               # Create a placeholder column if not found (assuming person-level data is in the merged set)
+               if col == "UNIQUE_ID":
+                    df[col] = df.index + 1
+               elif col == "PERSON_AGE":
+                    df[col] = pd.to_numeric(df.get(col, np.nan), errors='coerce').fillna(0).astype(int) # Coerce age to int, fill missing/bad with 0
+               elif col in ["EJECTION", "ZIP CODE", "PERSON_INJURY"]:
+                    df[col] = df.get(col, "Unknown").fillna("Unknown")
+               else:
+                    df[col] = df.get(col, "Unknown").fillna("Unknown")
+
+     # Ensure additional columns exist
+     for col in ["COMPLAINT", "VEHICLE TYPE CODE 1", "CONTRIBUTING FACTOR VEHICLE 1"]:
+          if col not in df.columns:
+               df[col] = "Unknown"
+else:
+     # safe defaults when no data is loaded yet
+     df["VEHICLE_TYPES_LIST"] = pd.Series([[] for _ in range(len(df))])
+     TOP_VEHICLE_TYPES = []
+     df["FACTORS_LIST"] = pd.Series([[] for _ in range(len(df))])
+     TOP_FACTORS = []
+     df["PERSON_TYPE"] = pd.Series([], dtype=object)
+     df["POSITION_IN_VEHICLE_CLEAN"] = pd.Series([], dtype=object)
+     for col in ["PERSON_AGE", "PERSON_SEX", "BODILY_INJURY", "SAFETY_EQUIPMENT", "EMOTIONAL_STATUS", "UNIQUE_ID", "EJECTION", "ZIP CODE", "PERSON_INJURY", "COMPLAINT", "VEHICLE TYPE CODE 1", "CONTRIBUTING FACTOR VEHICLE 1"]:
+          if col not in df.columns:
+               df[col] = pd.Series([], dtype=object)
 
 # Small helper to add jitter to lat/lon to separate overlapping points
 def jitter_coords(series, scale=0.0006):
