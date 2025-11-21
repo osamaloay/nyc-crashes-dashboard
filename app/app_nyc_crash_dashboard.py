@@ -1007,11 +1007,14 @@ if __name__ == "__main__":
 
      # Compute figures immediately (automatic update mode)
      outputs = None
-     try:
-          with st.spinner("Generating charts — this may take a few seconds..."):
-               outputs = compute_figures(list(year_slider), boroughs_sel, vehicle_sel, factor_sel, injury_sel, person_type_sel, search_text)
-     except Exception as e:
-          st.error(f"Could not compute dashboard figures: {e}")
+     if df.empty:
+          st.info("No dataset loaded — click 'Load dataset' in the sidebar to load data before generating charts.")
+     else:
+          try:
+               with st.spinner("Generating charts — this may take a few seconds..."):
+                    outputs = compute_figures(list(year_slider), boroughs_sel, vehicle_sel, factor_sel, injury_sel, person_type_sel, search_text)
+          except Exception as e:
+               st.error(f"Could not compute dashboard figures: {e}")
 
      if outputs:
           # Read named figures and stats from returned dict
