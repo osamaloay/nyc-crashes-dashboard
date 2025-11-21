@@ -27,7 +27,7 @@ st.set_page_config(page_title="NYC Crash Dashboard", layout="wide")
 
 PARQUET_PATH = "nyc_crashes.parquet"
 
-@st.cache_data(show_spinner="Loading dataset…")
+@st.cache_data
 def load_data():
      # Parquet-only loader: read `nyc_crashes.parquet` if present. Return empty DataFrame on any failure.
      if not os.path.exists(PARQUET_PATH):
