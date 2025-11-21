@@ -39,7 +39,8 @@ MINIMAL_COLUMNS = [
      "PERSON_TYPE", "PERSON_AGE", "PERSON_SEX", "PERSON_INJURY"
 ]
 # Maximum rows to keep for the fast sample path
-MAX_SAMPLE_ROWS = 50000
+# Increased per user request — WARNING: 1,000,000 rows may be memory-intensive on Streamlit Cloud
+MAX_SAMPLE_ROWS = 1_000_000
 # Safety limits for full reads and compute
 FULL_LOAD_SIZE_MB_THRESHOLD = 150  # if file larger than this, avoid loading entirely into memory unchanged
 MAX_FULL_ROWS = 200000  # cap rows when user requests full load to avoid OOM
