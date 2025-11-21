@@ -30,17 +30,42 @@ PARQUET_PATH = "nyc_crashes.parquet"
 @st.cache_data(show_spinner="Loading dataset…")
 def load_data():
      # Parquet-only loader: read `nyc_crashes.parquet` if present. Return empty DataFrame on any failure.
-     if os.path.exists(PARQUET_PATH):
-          try:
-               df = pd.read_parquet(PARQUET_PATH)
-               st.info(f"Loaded {len(df):,} rows from Parquet file.")
-               return df
-          except Exception as e:
-               st.error(f"Failed to read Parquet `{PARQUET_PATH}`: {e}")
-               return pd.DataFrame()
+     if not os.path.exists(PARQUET_PATH):
+          st.error(f"Parquet dataset `{PARQUET_PATH}` not found in the repository.")
+          return pd.DataFrame()
 
-     st.error(f"Parquet dataset `{PARQUET_PATH}` not found in the repository.")
-     return pd.DataFrame()
+     try:
+          size_bytes = os.path.getsize(PARQUET_PATH)
+          size_mb = size_bytes / 1024 ** 2
+          if size_mb > 200:
+               st.warning(f"Parquet file is large ({size_mb:.1f} MB). Loading may take time or exceed Streamlit Cloud memory limits.")
+          st.info(f"Found parquet `{PARQUET_PATH}` ({size_mb:.1f} MB). Attempting to read with pyarrow...")
+     except Exception:
+          st.info(f"Found parquet `{PARQUET_PATH}`. Attempting to read...")
+
+     # Try pyarrow first (most common)
+     try:
+          df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+          st.success(f"Loaded {len(df):,} rows from Parquet (pyarrow).")
+          return df
+     except Exception as e_py:
+          st.warning("Reading with pyarrow failed — will try fastparquet if available.")
+          st.exception(e_py)
+
+     # Fallback to fastparquet if installed
+     try:
+          import fastparquet  # type: ignore
+          try:
+               df = pd.read_parquet(PARQUET_PATH, engine="fastparquet")
+               st.success(f"Loaded {len(df):,} rows from Parquet (fastparquet).")
+               return df
+          except Exception as e_fp:
+               st.error("Reading with fastparquet also failed.")
+               st.exception(e_fp)
+               return pd.DataFrame()
+     except Exception:
+          st.error("`fastparquet` not available; install it or ensure `pyarrow` can read the file.")
+          return pd.DataFrame()
 
 # Do NOT load data at import time on the server. Start with an empty DataFrame
 # and load on-demand via the Streamlit UI to avoid import-time crashes on Cloud.
