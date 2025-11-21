@@ -1143,6 +1143,40 @@ if __name__ == "__main__":
                if hasattr(st, "experimental_rerun"):
                     st.experimental_rerun()
 
+          # --- Incremental loader progress indicator ---
+          try:
+               import pyarrow.parquet as pq
+               pqf_tmp = None
+               if os.path.exists(PARQUET_PATH):
+                    try:
+                         pqf_tmp = pq.ParquetFile(PARQUET_PATH)
+                         total_row_groups = int(pqf_tmp.num_row_groups)
+                    except Exception:
+                         total_row_groups = None
+               else:
+                    total_row_groups = None
+          except Exception:
+               pqf_tmp = None
+               total_row_groups = None
+
+          processed_rgs = int(st.session_state.get('incremental_next_rg', 0))
+          rows_loaded = len(st.session_state.get('df', pd.DataFrame()))
+
+          st.markdown("---")
+          st.markdown("**Incremental Load Progress**")
+          if total_row_groups:
+               st.write(f"Row-groups processed: **{processed_rgs}** / **{total_row_groups}**")
+               # progress bar based on row-groups
+               try:
+                    frac = min(processed_rgs / max(1, total_row_groups), 1.0)
+                    st.progress(frac)
+               except Exception:
+                    pass
+          else:
+               st.write(f"Row-groups processed: **{processed_rgs}**")
+
+          st.write(f"Approx. rows loaded: **{rows_loaded:,}**")
+
           # Keep a session-backed `df` so data persists across reruns
           if 'df' in st.session_state:
                df = st.session_state['df']
