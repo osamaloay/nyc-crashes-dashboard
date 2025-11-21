@@ -347,6 +347,7 @@ def parse_search_query(q):
 # -------------------------
 # Compute figures (converted from Dash callback)
 # -------------------------
+@st.cache_data(ttl=600)
 def compute_figures(year_range=None, boroughs=None, vehicles=None, factors=None, injuries=None, person_type=None, search_text=None):
      # Wrapper of previous Dash callback logic — compute all figures for given filters
      # Provide defaults
@@ -458,6 +459,12 @@ def compute_figures(year_range=None, boroughs=None, vehicles=None, factors=None,
          }
      }
 
+     # Performance tuning: sampling limits for heavy plots (reduced for responsiveness)
+     MAX_MAP_POINTS = 2000
+     MAX_DENSITY_POINTS = 5000
+     MAX_KMEANS_SAMPLE = 1000
+     MAX_VEHICLE_LISTS = 10000
+
      # Vibrant color sequence for line charts
      vibrant_colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9']
 
@@ -499,9 +506,14 @@ def compute_figures(year_range=None, boroughs=None, vehicles=None, factors=None,
      # 4) Crash locations points map - Consistent borough colors
      df_map = dff.dropna(subset=["LATITUDE", "LONGITUDE"]).copy()
      if not df_map.empty:
-          df_map["_LAT_JIT"] = jitter_coords(df_map["LATITUDE"].fillna(0).astype(float), scale=0.0005)
-          df_map["_LON_JIT"] = jitter_coords(df_map["LONGITUDE"].fillna(0).astype(float), scale=0.0005)
-          fig_map = px.scatter_mapbox(df_map, lat="_LAT_JIT", lon="_LON_JIT", color="BOROUGH",
+          # sample for plotting to keep browser responsive
+          if len(df_map) > MAX_MAP_POINTS:
+               df_map_plot = df_map.sample(n=MAX_MAP_POINTS, random_state=42)
+          else:
+               df_map_plot = df_map
+          df_map_plot["_LAT_JIT"] = jitter_coords(df_map_plot["LATITUDE"].fillna(0).astype(float), scale=0.0005)
+          df_map_plot["_LON_JIT"] = jitter_coords(df_map_plot["LONGITUDE"].fillna(0).astype(float), scale=0.0005)
+          fig_map = px.scatter_mapbox(df_map_plot, lat="_LAT_JIT", lon="_LON_JIT", color="BOROUGH",
                                        hover_name="FULL ADDRESS",
                                        hover_data={"FULL ADDRESS": True,
                                                    "TOTAL_INJURED": True,
@@ -598,6 +610,9 @@ def compute_figures(year_range=None, boroughs=None, vehicles=None, factors=None,
      if 'ALL_VEHICLE_TYPES' in dff.columns:
           # Build co-occurrence matrix for top N vehicle types
           vehicle_lists = dff['ALL_VEHICLE_TYPES'].apply(parse_vehicle_list)
+          # sample vehicle lists if too many rows to speed up processing
+          if len(vehicle_lists) > MAX_VEHICLE_LISTS:
+               vehicle_lists = vehicle_lists.sample(n=MAX_VEHICLE_LISTS, random_state=42)
           flat = [v for sub in vehicle_lists for v in sub]
           top_vts = pd.Series(flat).value_counts().head(12).index.tolist()
           # Build matrix
@@ -747,13 +762,23 @@ def compute_figures(year_range=None, boroughs=None, vehicles=None, factors=None,
      # 1. Hotspot Cluster Map
      df_coords = dff.dropna(subset=["LATITUDE", "LONGITUDE"]).copy()
      if len(df_coords) > 10:
-          coords = df_coords[["LATITUDE", "LONGITUDE"]].values
-          kmeans = KMeans(n_clusters=min(10, len(df_coords)), random_state=42)
-          df_coords["CLUSTER"] = kmeans.fit_predict(coords)
+          # sample for fitting kmeans, then predict clusters for full dataset
+          sample_n = min(MAX_KMEANS_SAMPLE, len(df_coords))
+          kmeans_sample = df_coords.sample(n=sample_n, random_state=42)
+          coords_sample = kmeans_sample[["LATITUDE", "LONGITUDE"]].values
+          kmeans = KMeans(n_clusters=min(10, len(kmeans_sample)), random_state=42)
+          kmeans.fit(coords_sample)
+          df_coords["CLUSTER"] = kmeans.predict(df_coords[["LATITUDE", "LONGITUDE"]].values)
           cluster_sizes = df_coords.groupby("CLUSTER").size()
           df_coords["CLUSTER_SIZE"] = df_coords["CLUSTER"].map(cluster_sizes)
 
-          fig_hotspot = px.scatter_mapbox(df_coords, lat="LATITUDE", lon="LONGITUDE",
+          # sample for plotting map points to keep browser responsive
+          if len(df_coords) > MAX_MAP_POINTS:
+               df_coords_plot = df_coords.sample(n=MAX_MAP_POINTS, random_state=42)
+          else:
+               df_coords_plot = df_coords
+
+          fig_hotspot = px.scatter_mapbox(df_coords_plot, lat="LATITUDE", lon="LONGITUDE",
                                          color="CLUSTER_SIZE", size="CLUSTER_SIZE",
                                          hover_name="FULL ADDRESS",
                                          hover_data={"CLUSTER_SIZE": True, "TOTAL_INJURED": True},
@@ -812,7 +837,12 @@ def compute_figures(year_range=None, boroughs=None, vehicles=None, factors=None,
      # 5. Risk Density Map
      df_risk = dff.dropna(subset=["LATITUDE", "LONGITUDE"]).copy()
      if not df_risk.empty:
-          fig_density = px.density_mapbox(df_risk, lat='LATITUDE', lon='LONGITUDE',
+          # sample for density plotting to limit rendering time
+          if len(df_risk) > MAX_DENSITY_POINTS:
+               df_risk_plot = df_risk.sample(n=MAX_DENSITY_POINTS, random_state=42)
+          else:
+               df_risk_plot = df_risk
+          fig_density = px.density_mapbox(df_risk_plot, lat='LATITUDE', lon='LONGITUDE',
                                          z='SEVERITY_SCORE', radius=20,
                                          zoom=9, height=500,
                                          mapbox_style="open-street-map",
@@ -911,16 +941,7 @@ if __name__ == "__main__":
           person_type_sel = st.multiselect("Person Type", options=sorted(df["PERSON_TYPE"].dropna().unique()), default=None)
           injury_sel = st.multiselect("Injury Type", options=sorted(df["PERSON_INJURY"].dropna().unique()), default=None)
           search_text = st.text_input("Advanced Search", value="")
-          generate_btn = st.button("Generate Report")
           clear_btn = st.button("Clear Filters")
-
-          # Initialize generate flag in session state
-          if "generate_report" not in st.session_state:
-               st.session_state.generate_report = False
-
-          # If user clicks generate, set the flag so main block computes figures
-          if generate_btn:
-               st.session_state.generate_report = True
 
      # Manage clear filters
      if clear_btn:
@@ -931,18 +952,15 @@ if __name__ == "__main__":
           injury_sel = None
           search_text = ""
           year_slider = (int(min_year), int(max_year))
-          # clear the generate flag so charts are not shown until user regenerates
-          st.session_state.generate_report = False
+          # (automatic update mode) clear resets filters; visuals update automatically
 
-     # Compute figures only when user clicks "Generate Report"
+     # Compute figures immediately (automatic update mode)
      outputs = None
-     if st.session_state.get("generate_report", False):
-          try:
+     try:
+          with st.spinner("Generating charts — this may take a few seconds..."):
                outputs = compute_figures(list(year_slider), boroughs_sel, vehicle_sel, factor_sel, injury_sel, person_type_sel, search_text)
-          except Exception as e:
-               st.error(f"Could not compute dashboard figures: {e}")
-     else:
-          st.info("Click 'Generate Report' to render visualizations with current filters.")
+     except Exception as e:
+          st.error(f"Could not compute dashboard figures: {e}")
 
      if outputs:
           # Read named figures and stats from returned dict

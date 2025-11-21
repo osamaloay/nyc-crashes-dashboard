@@ -1,9 +1,10 @@
-dash
-dash-bootstrap-components  
+streamlit
 pandas
+pyarrow
 plotly
 numpy
 gunicorn
 scikit-learn
+sqlalchemy
 requests==2.31.0
 beautifulsoup4==4.12.2
