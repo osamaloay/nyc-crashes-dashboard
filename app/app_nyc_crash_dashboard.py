@@ -37,45 +37,28 @@ import os
 st.set_page_config(page_title="NYC Crash Dashboard", layout="wide")
 
 PARQUET_PATH = "nyc_crashes.parquet"
-CSV_PATH = "merged_cleaned_dataset.csv"
 
 @st.cache_data(show_spinner="Loading dataset…")
 def load_data():
-     """Load dataset: prefer CSV (`merged_cleaned_dataset.csv`) if present, otherwise try Parquet.
-     Return an empty DataFrame on any failure so Streamlit can start.
-     """
-     # Try CSV first (user-supplied cleaned CSV)
-     if os.path.exists(CSV_PATH):
-          try:
-               df = pd.read_csv(CSV_PATH, parse_dates=["CRASH_DATETIME"], low_memory=False)
-               st.success(f"Loaded {len(df):,} rows from CSV file.")
-               return df
-          except Exception as e:
-               st.error(f"Failed to load CSV `{CSV_PATH}`: {e}")
-               return pd.DataFrame()
-
-     # Fallback to parquet if CSV not present
+     # Parquet-only loader: read `nyc_crashes.parquet` if present. Return empty DataFrame on any failure.
      if os.path.exists(PARQUET_PATH):
           try:
                df = pd.read_parquet(PARQUET_PATH)
-               st.success(f"Loaded {len(df):,} rows from Parquet file.")
+               st.info(f"Loaded {len(df):,} rows from Parquet file.")
                return df
           except Exception as e:
-               st.error(f"Failed to load Parquet `{PARQUET_PATH}`: {e}")
+               st.error(f"Failed to read Parquet `{PARQUET_PATH}`: {e}")
                return pd.DataFrame()
 
-     # No dataset found
-     st.error(f"No dataset found. Add `{CSV_PATH}` or `{PARQUET_PATH}` to the repo.")
+     st.error(f"Parquet dataset `{PARQUET_PATH}` not found in the repository.")
      return pd.DataFrame()
 
-# Attempt to load data but don't let startup crash the app — simple fallback
-try:
-    df = load_data()
-except Exception:
-    # keep a minimal empty DataFrame on error so Streamlit can start
-    df = pd.DataFrame()
+# Do NOT load data at import time on the server. Start with an empty DataFrame
+# and load on-demand via the Streamlit UI to avoid import-time crashes on Cloud.
+df = pd.DataFrame()
 
-# Clean borough names to proper capitalization
+# Data preparation is skipped at import time. When data is present we perform
+# normalization; otherwise we initialize safe defaults so the UI can render.
 borough_mapping = {
      'MANHATTAN': 'Manhattan',
      'BROOKLYN': 'Brooklyn',
@@ -84,59 +67,62 @@ borough_mapping = {
      'STATEN ISLAND': 'Staten Island'
 }
 
-if "BOROUGH" in df.columns:
-     df["BOROUGH"] = df["BOROUGH"].str.title().replace(borough_mapping)
-     df["BOROUGH"] = df["BOROUGH"].fillna("Unknown")
+if not df.empty:
+     # Normalize and cast useful columns
+     if "BOROUGH" in df.columns:
+          df["BOROUGH"] = df["BOROUGH"].str.title().replace(borough_mapping)
+          df["BOROUGH"] = df["BOROUGH"].fillna("Unknown")
+     else:
+          df["BOROUGH"] = "Unknown"
+
+     # Convert crash datetime to datetime (coerce errors)
+     df["CRASH_DATETIME"] = pd.to_datetime(df.get("CRASH_DATETIME", pd.NaT), errors="coerce")
+     # YEAR for slider and groupings
+     df["YEAR"] = df["CRASH_DATETIME"].dt.year
+     df["MONTH"] = df["CRASH_DATETIME"].dt.month
+     df["HOUR"] = df["CRASH_DATETIME"].dt.hour
+     df["DAY_OF_WEEK"] = df["CRASH_DATETIME"].dt.day_name()
+
+     # Cast numeric injury/killed counts to numeric (safe)
+     num_cols = [
+          "NUMBER OF PERSONS INJURED", "NUMBER OF PERSONS KILLED",
+          "NUMBER OF PEDESTRIANS INJURED", "NUMBER OF PEDESTRIANS KILLED",
+          "NUMBER OF CYCLIST INJURED", "NUMBER OF CYCLIST KILLED",
+          "NUMBER OF MOTORIST INJURED", "NUMBER OF MOTORIST KILLED"
+     ]
+     for c in num_cols:
+          if c in df.columns:
+               df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+          else:
+               df[c] = 0
+
+     # Helpful aggregated numeric columns
+     df["TOTAL_INJURED"] = df[["NUMBER OF PERSONS INJURED",
+                                     "NUMBER OF PEDESTRIANS INJURED",
+                                     "NUMBER OF CYCLIST INJURED",
+                                     "NUMBER OF MOTORIST INJURED"]].sum(axis=1)
+     df["TOTAL_KILLED"] = df[["NUMBER OF PERSONS KILLED",
+                                    "NUMBER OF PEDESTRIANS KILLED",
+                                    "NUMBER OF CYCLIST KILLED",
+                                    "NUMBER OF MOTORIST KILLED"]].sum(axis=1)
+
+     # Create severity score for advanced analysis
+     df["SEVERITY_SCORE"] = (df["TOTAL_INJURED"] * 1 + df["TOTAL_KILLED"] * 5)
+
+     # FULL_ADDRESS fallback
+     if "FULL ADDRESS" not in df.columns:
+          df["FULL ADDRESS"] = df.get("ON STREET NAME", "").fillna("") + ", " + df.get("BOROUGH", "")
+
+     # Latitude / Longitude as numeric
+     for coord in ("LATITUDE", "LONGITUDE"):
+          if coord in df.columns:
+               df[coord] = pd.to_numeric(df[coord], errors="coerce")
+          else:
+               df[coord] = np.nan
 else:
-     df["BOROUGH"] = "Unknown"
-
-# Normalize and cast useful columns
-# Keep original columns but create convenient working columns
-# Some columns have spaces in names; use exact names from your message.
-# Convert crash datetime to datetime (coerce errors)
-df["CRASH_DATETIME"] = pd.to_datetime(df.get("CRASH_DATETIME", pd.NaT), errors="coerce")
-# YEAR for slider and groupings
-df["YEAR"] = df["CRASH_DATETIME"].dt.year
-df["MONTH"] = df["CRASH_DATETIME"].dt.month
-df["HOUR"] = df["CRASH_DATETIME"].dt.hour
-df["DAY_OF_WEEK"] = df["CRASH_DATETIME"].dt.day_name()
-
-# Cast numeric injury/killed counts to numeric (safe)
-num_cols = [
-    "NUMBER OF PERSONS INJURED", "NUMBER OF PERSONS KILLED",
-    "NUMBER OF PEDESTRIANS INJURED", "NUMBER OF PEDESTRIANS KILLED",
-    "NUMBER OF CYCLIST INJURED", "NUMBER OF CYCLIST KILLED",
-    "NUMBER OF MOTORIST INJURED", "NUMBER OF MOTORIST KILLED"
-]
-for c in num_cols:
-    if c in df.columns:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
-    else:
-        df[c] = 0
-
-# Helpful aggregated numeric columns
-df["TOTAL_INJURED"] = df[["NUMBER OF PERSONS INJURED",
-                          "NUMBER OF PEDESTRIANS INJURED",
-                          "NUMBER OF CYCLIST INJURED",
-                          "NUMBER OF MOTORIST INJURED"]].sum(axis=1)
-df["TOTAL_KILLED"] = df[["NUMBER OF PERSONS KILLED",
-                         "NUMBER OF PEDESTRIANS KILLED",
-                         "NUMBER OF CYCLIST KILLED",
-                         "NUMBER OF MOTORIST KILLED"]].sum(axis=1)
-
-# Create severity score for advanced analysis
-df["SEVERITY_SCORE"] = (df["TOTAL_INJURED"] * 1 + df["TOTAL_KILLED"] * 5)
-
-# FULL_ADDRESS fallback
-if "FULL ADDRESS" not in df.columns:
-    df["FULL ADDRESS"] = df.get("ON STREET NAME", "").fillna("") + ", " + df.get("BOROUGH", "")
-
-# Latitude / Longitude as numeric
-for coord in ("LATITUDE", "LONGITUDE"):
-    if coord in df.columns:
-        df[coord] = pd.to_numeric(df[coord], errors="coerce")
-    else:
-        df[coord] = np.nan
+     # Safe defaults when no data is loaded yet
+     df["BOROUGH"] = pd.Series([], dtype=object)
+     df["YEAR"] = pd.Series([], dtype="float64")
 
 # Parse ALL_VEHICLE_TYPES (which may be a string representation of a list) and create a flattened column
 def parse_vehicle_list(v):
@@ -947,19 +933,40 @@ if __name__ == "__main__":
      # Sidebar controls
      with st.sidebar:
           st.header("Filters")
-          year_slider = st.slider(
-               "Year Range",
-               min_value=int(min_year),
-               max_value=int(max_year),
-               value=(int(min_year), int(max_year)),
-          )
-          boroughs_sel = st.multiselect("Borough", options=sorted(df["BOROUGH"].dropna().unique()), default=None)
-          vehicle_sel = st.multiselect("Vehicle Type", options=sorted({vt for sub in df["VEHICLE_TYPES_LIST"] for vt in sub}), default=None)
-          factor_sel = st.multiselect("Contributing Factor", options=sorted({f for sub in df["FACTORS_LIST"] for f in sub}), default=None)
-          person_type_sel = st.multiselect("Person Type", options=sorted(df["PERSON_TYPE"].dropna().unique()), default=None)
-          injury_sel = st.multiselect("Injury Type", options=sorted(df["PERSON_INJURY"].dropna().unique()), default=None)
-          search_text = st.text_input("Advanced Search", value="")
-          clear_btn = st.button("Clear Filters")
+          # Load dataset on demand to avoid import-time crashes on Streamlit Cloud
+          if st.button("Load dataset"):
+               _df = load_data()
+               if not _df.empty:
+                    # store loaded DataFrame into module-global `df` and rerun
+                    globals()['df'] = _df
+                    st.experimental_rerun()
+
+          if df.empty:
+               st.warning("Dataset not loaded. Click 'Load dataset' to load the CSV/parquet (may be large).")
+               # Provide defaults so UI renders
+               default_filters = get_default_filters()
+               year_slider = st.slider("Year Range", min_value=int(default_filters[0][0]), max_value=int(default_filters[0][1]), value=(int(default_filters[0][0]), int(default_filters[0][1])))
+               boroughs_sel = None
+               vehicle_sel = None
+               factor_sel = None
+               person_type_sel = None
+               injury_sel = None
+               search_text = ""
+               clear_btn = False
+          else:
+               year_slider = st.slider(
+                    "Year Range",
+                    min_value=int(min_year),
+                    max_value=int(max_year),
+                    value=(int(min_year), int(max_year)),
+               )
+               boroughs_sel = st.multiselect("Borough", options=sorted(df["BOROUGH"].dropna().unique()), default=None)
+               vehicle_sel = st.multiselect("Vehicle Type", options=sorted({vt for sub in df.get("VEHICLE_TYPES_LIST", []) for vt in sub}), default=None)
+               factor_sel = st.multiselect("Contributing Factor", options=sorted({f for sub in df.get("FACTORS_LIST", []) for f in sub}), default=None)
+               person_type_sel = st.multiselect("Person Type", options=sorted(df.get("PERSON_TYPE", pd.Series([])).dropna().unique()), default=None)
+               injury_sel = st.multiselect("Injury Type", options=sorted(df.get("PERSON_INJURY", pd.Series([])).dropna().unique()), default=None)
+               search_text = st.text_input("Advanced Search", value="")
+               clear_btn = st.button("Clear Filters")
 
      # Manage clear filters
      if clear_btn:
