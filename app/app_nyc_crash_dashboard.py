@@ -25,7 +25,13 @@ import streamlit as st
 # -----------------------------
 st.set_page_config(page_title="NYC Crash Dashboard", layout="wide")
 
-PARQUET_PATH = "nyc_crashes.parquet"
+# Prefer a rewritten, partitioned ZSTD dataset if present (faster incremental reads).
+DEFAULT_PARQUET = "nyc_crashes.parquet"
+REWRITTEN_DATASET_DIR = "parquet_zstd_by_year"
+if os.path.isdir(REWRITTEN_DATASET_DIR):
+     PARQUET_PATH = REWRITTEN_DATASET_DIR
+else:
+     PARQUET_PATH = DEFAULT_PARQUET
 
 # Read-time tuning
 MINIMAL_COLUMNS = [
