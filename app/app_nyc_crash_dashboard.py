@@ -105,7 +105,9 @@ def load_data(full: bool = False):
 
           # FULL_ADDRESS fallback
           if "FULL ADDRESS" not in df_loaded.columns:
-               df_loaded["FULL ADDRESS"] = df_loaded.get("ON STREET NAME", "").fillna("") + ", " + df_loaded.get("BOROUGH", "")
+               on_street = df_loaded["ON STREET NAME"].fillna("") if "ON STREET NAME" in df_loaded.columns else ""
+               borough_val = df_loaded["BOROUGH"].fillna("") if "BOROUGH" in df_loaded.columns else ""
+               df_loaded["FULL ADDRESS"] = on_street + ", " + borough_val
 
           # Lat/Lon numeric
           for coord in ("LATITUDE", "LONGITUDE"):
@@ -152,17 +154,26 @@ def load_data(full: bool = False):
           factor_counts = pd.Series(all_factors_flat).value_counts() if all_factors_flat else pd.Series([], dtype=object)
           globals()["TOP_FACTORS"] = factor_counts.head(10).index.tolist() if not factor_counts.empty else []
 
-          # Ensure person-related columns exist
-          for col in ["PERSON_TYPE", "POSITION_IN_VEHICLE_CLEAN", "PERSON_AGE", "PERSON_SEX", "BODILY_INJURY", "SAFETY_EQUIPMENT", "EMOTIONAL_STATUS", "UNIQUE_ID", "EJECTION", "ZIP CODE", "PERSON_INJURY"]:
-               if col not in df_loaded.columns:
-                    if col == "UNIQUE_ID":
-                         df_loaded[col] = df_loaded.index + 1
-                    elif col == "PERSON_AGE":
-                         df_loaded[col] = pd.to_numeric(df_loaded.get(col, np.nan), errors='coerce').fillna(0).astype(int)
-                    elif col in ["EJECTION", "ZIP CODE", "PERSON_INJURY"]:
-                         df_loaded[col] = df_loaded.get(col, "Unknown").fillna("Unknown")
+          # Ensure person-related columns exist. Create proper Series for missing columns
+          person_cols = ["PERSON_TYPE", "POSITION_IN_VEHICLE_CLEAN", "PERSON_AGE", "PERSON_SEX", "BODILY_INJURY", "SAFETY_EQUIPMENT", "EMOTIONAL_STATUS", "UNIQUE_ID", "EJECTION", "ZIP CODE", "PERSON_INJURY"]
+          for col in person_cols:
+               if col in df_loaded.columns:
+                    # Fill or coerce existing column values safely
+                    if col == "PERSON_AGE":
+                         df_loaded[col] = pd.to_numeric(df_loaded[col], errors='coerce').fillna(0).astype(int)
                     else:
-                         df_loaded[col] = df_loaded.get(col, "Unknown").fillna("Unknown")
+                         try:
+                              df_loaded[col] = df_loaded[col].fillna("Unknown")
+                         except Exception:
+                              df_loaded[col] = df_loaded[col].astype(str).fillna("Unknown")
+               else:
+                    # Create a column of the appropriate default type/value
+                    if col == "UNIQUE_ID":
+                         df_loaded[col] = pd.Series(range(1, len(df_loaded) + 1), index=df_loaded.index)
+                    elif col == "PERSON_AGE":
+                         df_loaded[col] = pd.Series([0] * len(df_loaded), index=df_loaded.index, dtype=int)
+                    else:
+                         df_loaded[col] = pd.Series(["Unknown"] * len(df_loaded), index=df_loaded.index)
 
           # Ensure additional columns exist
           for col in ["COMPLAINT", "VEHICLE TYPE CODE 1", "CONTRIBUTING FACTOR VEHICLE 1"]:
@@ -1128,6 +1139,8 @@ if __name__ == "__main__":
      with st.sidebar:
           st.header("Filters")
           st.markdown("Load data: choose a fast sample for interactive exploration or the full dataset (may be slow or exceed memory).")
+          # Auto-update toggle and manual Generate button support
+          auto_update = st.checkbox("Auto-update visuals", value=True, help="When enabled, charts update automatically when filters change. When disabled, click 'Generate Report' to update visuals.")
           # Load dataset on demand to avoid import-time crashes on Streamlit Cloud
           if st.button("Load sample (fast)"):
                _df = load_data(full=False)
@@ -1175,6 +1188,8 @@ if __name__ == "__main__":
                injury_sel = st.multiselect("Injury Type", options=sorted(df.get("PERSON_INJURY", pd.Series([])).dropna().unique()), default=None)
                search_text = st.text_input("Advanced Search", value="")
                clear_btn = st.button("Clear Filters")
+               generate_btn = st.button("Generate Report")
+               # If dataset small and auto_update is True, we will compute automatically later
 
      # Manage clear filters
      if clear_btn:
@@ -1187,16 +1202,24 @@ if __name__ == "__main__":
           year_slider = (int(min_year), int(max_year))
           # (automatic update mode) clear resets filters; visuals update automatically
 
-     # Compute figures immediately (automatic update mode)
+     # Compute figures: either auto-update or when user clicks Generate Report
      outputs = None
      if df.empty:
           st.info("No dataset loaded — click 'Load dataset' in the sidebar to load data before generating charts.")
      else:
-          try:
-               with st.spinner("Generating charts — this may take a few seconds..."):
-                    outputs = compute_figures(list(year_slider), boroughs_sel, vehicle_sel, factor_sel, injury_sel, person_type_sel, search_text)
-          except Exception as e:
-               st.error(f"Could not compute dashboard figures: {e}")
+          should_run = auto_update if 'auto_update' in locals() else True
+          # If auto-update is off, only run when user clicks Generate Report
+          if not should_run:
+               if 'generate_btn' in locals() and generate_btn:
+                    should_run = True
+          if should_run:
+               try:
+                    with st.spinner("Generating charts — this may take a few seconds..."):
+                         outputs = compute_figures(list(year_slider), boroughs_sel, vehicle_sel, factor_sel, injury_sel, person_type_sel, search_text)
+               except Exception as e:
+                    st.error(f"Could not compute dashboard figures: {e}")
+          else:
+               st.info("Filters set. Click 'Generate Report' to update visuals.")
 
      if outputs:
           # Read named figures and stats from returned dict
