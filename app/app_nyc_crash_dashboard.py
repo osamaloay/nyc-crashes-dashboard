@@ -174,6 +174,26 @@ def load_data(full: bool = False):
                if col in df_loaded.columns:
                     df_loaded[col] = _clean_unknowns(df_loaded[col], keep_top=500)
 
+          # Drop rows that contain 'Unknown' in any string/object column to reduce noise
+          try:
+               string_cols = df_loaded.select_dtypes(include=['object', 'string']).columns.tolist()
+               if string_cols:
+                    unk_mask = df_loaded[string_cols].apply(lambda s: s.fillna('').astype(str).str.strip().str.lower() == 'unknown')
+                    rows_with_unk = unk_mask.any(axis=1)
+                    num_drop = int(rows_with_unk.sum())
+                    if num_drop > 0:
+                         df_loaded = df_loaded.loc[~rows_with_unk].reset_index(drop=True)
+                         try:
+                              st.info(f"Removed {num_drop:,} rows containing 'Unknown' in string columns to improve chart quality.")
+                         except Exception:
+                              pass
+                    # If all rows were dropped, return empty DataFrame early
+                    if len(df_loaded) == 0:
+                         return pd.DataFrame()
+          except Exception:
+               # Be permissive: if anything goes wrong in cleaning, continue with the original df_loaded
+               pass
+
           # Ensure person-related columns exist. Create proper Series for missing columns
           person_cols = ["PERSON_TYPE", "POSITION_IN_VEHICLE_CLEAN", "PERSON_AGE", "PERSON_SEX", "BODILY_INJURY", "SAFETY_EQUIPMENT", "EMOTIONAL_STATUS", "UNIQUE_ID", "EJECTION", "ZIP CODE", "PERSON_INJURY"]
           for col in person_cols:
