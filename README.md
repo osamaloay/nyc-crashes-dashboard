@@ -1,4 +1,5 @@
-
+- **## Sample deployed Dasboard ( girly pop 🩷)**
+  `[https://nyc-crashes.up.railway.app/]`
 
 ## Project Overview
 
@@ -19,27 +20,6 @@ The datasets were integrated using the common field **`COLLISION_ID`**.
 
 ---
 
-## Setup Instructions 
-
-This project was developed using **Google Colab** for initial exploration and cleaning, and the interactive dashboard was built using **Streamlit** for local and cloud deployment.
-
-### 1. Open the Notebook
-
-Click the link to open the notebook in Google Colab:
-
-[Add your Colab notebook link here]
-
-### 2. Run the Notebook
-
-- Click `Runtime` → `Run all` to execute all cells sequentially.
-- The notebook will:
-    - Load the NYC crash datasets
-    - Perform pre-cleaning and integration
-    - Produce the final cleaned dataset
-    - Generate visualizations for exploration
-
----
-
 ## Deployment Instructions
 
 The dashboard was deployed online for interactive use.  
@@ -54,7 +34,8 @@ The dashboard was deployed online for interactive use.
 ### Live Dashboard
 
 **URL:**  
-`[Paste your live dashboard link here]`
+`[https://nyc-crashes-dashboard-82lpeohclvrgupvgqth2j8.streamlit.app/]`
+`[https://nyc-crashes-dashboard-82lpeohclvrgupvgqth2j8.streamlit.app/]`
 
 > Users can interact with the dashboard in real time without installing anything locally.
 
