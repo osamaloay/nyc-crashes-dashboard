@@ -1,4 +1,4 @@
-- **## Sample deployed Dasboard ( girly pop 🩷)**
+- # Sample deployed Dasboard ( girly pop 🩷)
   `[https://nyc-crashes.up.railway.app/]`
 
 ## Project Overview
