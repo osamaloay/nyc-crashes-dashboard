@@ -7,7 +7,16 @@ import numpy as np
 import plotly.express as px
 import duckdb
 import os
+import sys
 from datetime import datetime
+
+# Ensure the repository root is on sys.path so `import app.*` works when
+# Streamlit runs this file as a script (Streamlit executes the file directly,
+# which can cause the package root to be missing from sys.path).
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
+
 from app.figures import (
     injuries_by_borough,
     factor_bar,
