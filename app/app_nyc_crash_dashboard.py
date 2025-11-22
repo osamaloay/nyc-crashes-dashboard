@@ -8,9 +8,72 @@ import plotly.express as px
 import duckdb
 import os
 from datetime import datetime
+from app.figures import (
+    injuries_by_borough,
+    factor_bar,
+    crashes_by_year,
+    map_aggregate_scatter,
+    gender_pie,
+    age_histogram,
+    temporal_heatmap,
+    severity_by_borough,
+    density_map,
+)
 
 st.set_page_config(page_title="NYC Crash Dashboard", layout="wide", initial_sidebar_state="expanded")
 st.title("NYC Crash Dashboard (fast mode)")
+
+# Dark theme: deep navy background with teal/indigo accents and high-contrast light text
+st.markdown(
+    """
+    <style>
+    /* App background and primary containers */
+    :root, .stApp { background: #071122; color: #e6eef8; }
+    .block-container { background: #0f1b2a; border-radius: 10px; padding: 1.2rem 1.5rem; color: #e6eef8; max-width: 1200px; margin: 1.5rem auto; }
+
+    /* ensure there's top padding so the header/title is fully visible */
+    header, .stApp, .block-container { padding-top: 1rem; }
+
+    /* prevent the top title from being clipped and give it room */
+    h1 { margin-top: 0.25rem !important; margin-bottom: 0.35rem !important; font-size: 28px !important; line-height: 1.15 !important; word-break: break-word; }
+    .stPageHeader { padding-top: 0.5rem; }
+
+    /* Headings and primary accents */
+    h1, h2, h3 { color: #e6eef8 !important; }
+    .stMetricValue, .stMetricLabel { color: #e6eef8 !important; }
+
+    /* Buttons: teal/indigo accents with readable text */
+    .stButton>button { background-color: #0ea5a4 !important; color: #052025 !important; border: 1px solid rgba(255,255,255,0.06) !important; }
+
+    /* Sidebar: slightly darker to separate content and increase width for controls */
+    .css-1d391kg, .stSidebar { background-color: #07121a !important; color: #e6eef8 !important; }
+    .stSidebar { min-width: 260px !important; }
+
+    /* Links and small accents */
+    a { color: #7c8cff !important; }
+
+        /* Improve card contrast and subtle shadows */
+        .stCard { box-shadow: 0 6px 18px rgba(2,6,23,0.6); border-radius: 8px; background: #0f2433; }
+
+        /* Tweak metric and header spacing for denser dark layout */
+        .stMetric { padding: 8px 10px; }
+        .stHeader { color: #e6eef8 !important; }
+        .stMetricValue { font-weight: 600; font-size: 20px; }
+
+        /* Make code blocks and tables more readable */
+        .stMarkdown code { background: rgba(255,255,255,0.03); color: #dff6fb; }
+        .stDataFrame th { color: #e6eef8; }
+
+        /* Responsive: tighten layout on narrow screens */
+        @media (max-width: 900px) {
+            .block-container { padding-left: 0.75rem; padding-right: 0.75rem; margin: 0.75rem; }
+            h1 { font-size: 22px !important; }
+            .stSidebar { min-width: 200px !important; }
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 PAR_SUM = "crashes_summary.parquet"
 PAR_LOC = "crash_locations.parquet"
@@ -327,27 +390,37 @@ if generate:
         col3.metric("Total Killed (agg)", f"{total_killed:,}")
 
         st.markdown("### Crashes by year (filtered)")
-        # Prefer counts from locations (one row per crash) for accurate per-year totals
-        if 'YEAR' in locs.columns and not locs['YEAR'].isnull().all():
-            year_df = locs.groupby('YEAR').size().reset_index(name='COUNT')
-            fig_year = px.bar(year_df.sort_values('YEAR'), x='YEAR', y='COUNT', labels={'COUNT':'Crashes','YEAR':'Year'}, title='Crashes by Year')
+        # Use DuckDB-backed figure builder for crashes by year (fast, parquet-backed)
+        try:
+            fig_year = crashes_by_year(parquet_path=PAR_LOC, boroughs=boroughs or None, year_range=year_range)
             st.plotly_chart(fig_year, width='stretch')
-        else:
-            year_df = dfv.groupby('YEAR')['COUNT'].sum().reset_index()
-            fig_year = px.bar(year_df.sort_values('YEAR'), x='YEAR', y='COUNT', labels={'COUNT':'Crashes','YEAR':'Year'}, title='Crashes by Year')
-            st.plotly_chart(fig_year, width='stretch')
+        except Exception:
+            # fallback to local pandas-based rendering
+            if 'YEAR' in locs.columns and not locs['YEAR'].isnull().all():
+                year_df = locs.groupby('YEAR').size().reset_index(name='COUNT')
+                fig_year = px.bar(year_df.sort_values('YEAR'), x='YEAR', y='COUNT', labels={'COUNT':'Crashes','YEAR':'Year'}, title='Crashes by Year')
+                st.plotly_chart(fig_year, width='stretch')
+            else:
+                year_df = dfv.groupby('YEAR')['COUNT'].sum().reset_index()
+                fig_year = px.bar(year_df.sort_values('YEAR'), x='YEAR', y='COUNT', labels={'COUNT':'Crashes','YEAR':'Year'}, title='Crashes by Year')
+                st.plotly_chart(fig_year, width='stretch')
 
         st.markdown("### Share by borough (filtered)")
-        # Use locations for borough share if available
-        if 'BOROUGH' in locs.columns:
-            borough_df = locs.groupby('BOROUGH').size().reset_index(name='COUNT').sort_values('COUNT', ascending=False)
-        else:
-            borough_df = dfv.groupby('BOROUGH')['COUNT'].sum().reset_index().sort_values('COUNT', ascending=False)
-        if not borough_df.empty:
-            fig_b = px.pie(borough_df, values='COUNT', names='BOROUGH', title='Crashes by Borough', hole=0.3)
-            if show_percentages:
-                fig_b.update_traces(textinfo='percent+label')
+        try:
+            # injuries are aggregated in the summary parquet (SUM_INJURED/SUM_KILLED)
+            fig_b = injuries_by_borough(parquet_path=PAR_SUM, boroughs=boroughs or None, year_range=year_range)
             st.plotly_chart(fig_b, width='stretch')
+        except Exception:
+            # fallback to pie via pandas
+            if 'BOROUGH' in locs.columns:
+                borough_df = locs.groupby('BOROUGH').size().reset_index(name='COUNT').sort_values('COUNT', ascending=False)
+            else:
+                borough_df = dfv.groupby('BOROUGH')['COUNT'].sum().reset_index().sort_values('COUNT', ascending=False)
+            if not borough_df.empty:
+                fig_b = px.pie(borough_df, values='COUNT', names='BOROUGH', title='Crashes by Borough', hole=0.3)
+                if show_percentages:
+                    fig_b.update_traces(textinfo='percent+label')
+                st.plotly_chart(fig_b, width='stretch')
 
     with tab_vehicles:
         st.subheader("Top vehicle types")
@@ -399,9 +472,14 @@ if generate:
 
     with tab_factors:
         st.subheader("Top contributing factors")
-        top_f = dfv.groupby('FACTOR')['COUNT'].sum().reset_index().sort_values('COUNT', ascending=False).head(30)
-        fig_f = px.bar(top_f, x='COUNT', y='FACTOR', orientation='h', title='Top Contributing Factors')
-        st.plotly_chart(fig_f, width='stretch')
+        try:
+            # Factors are available in the summary parquet (FACTOR) or in raw person file
+            fig_f = factor_bar(parquet_path=PAR_SUM, boroughs=boroughs or None, year_range=year_range, top_n=30)
+            st.plotly_chart(fig_f, width='stretch')
+        except Exception:
+            top_f = dfv.groupby('FACTOR')['COUNT'].sum().reset_index().sort_values('COUNT', ascending=False).head(30)
+            fig_f = px.bar(top_f, x='COUNT', y='FACTOR', orientation='h', title='Top Contributing Factors')
+            st.plotly_chart(fig_f, width='stretch')
 
         st.markdown("### Factors by borough (heatmap)")
         if 'FACTOR' in dfv.columns and 'BOROUGH' in dfv.columns:
@@ -419,21 +497,23 @@ if generate:
         if len(locs_sample) > map_points:
             locs_sample = locs_sample.sample(map_points, random_state=42)
         if not locs_sample.empty:
-            # clustering: simple grid aggregation by rounding coordinates
             if cluster_map:
-                prec = cluster_precision
-                locs_agg = locs_sample.copy()
-                locs_agg['lat_r'] = locs_agg['lat'].round(prec)
-                locs_agg['lon_r'] = locs_agg['lon'].round(prec)
-                agg = locs_agg.groupby(['lat_r','lon_r']).agg(count=('lat','size'),
-                                                              severity_mean=('severity_score','mean')).reset_index()
-                agg['lat'] = agg['lat_r']
-                agg['lon'] = agg['lon_r']
-                # size by count
-                agg['size'] = (agg['count'] - agg['count'].min() + 1) / (agg['count'].max() - agg['count'].min() + 1) * 30 + 5
-                fig_map = px.scatter_mapbox(agg, lat='lat', lon='lon', size='size', size_max=40, color='severity_mean', hover_data=['count','severity_mean'], zoom=10, height=600)
-                fig_map.update_layout(mapbox_style='open-street-map')
-                st.plotly_chart(fig_map, use_container_width=True)
+                try:
+                    fig_map = map_aggregate_scatter(parquet_path=PAR_LOC, boroughs=boroughs or None, year_range=year_range, sample_limit=map_points, cluster_precision=cluster_precision)
+                    st.plotly_chart(fig_map, width='stretch')
+                except Exception:
+                    # fallback to local aggregation
+                    prec = cluster_precision
+                    locs_agg = locs_sample.copy()
+                    locs_agg['lat_r'] = locs_agg['lat'].round(prec)
+                    locs_agg['lon_r'] = locs_agg['lon'].round(prec)
+                    agg = locs_agg.groupby(['lat_r','lon_r']).agg(count=('lat','size'), severity_mean=('severity_score','mean')).reset_index()
+                    agg['lat'] = agg['lat_r']
+                    agg['lon'] = agg['lon_r']
+                    agg['size'] = (agg['count'] - agg['count'].min() + 1) / (agg['count'].max() - agg['count'].min() + 1) * 30 + 5
+                    fig_map = px.scatter_mapbox(agg, lat='lat', lon='lon', size='size', size_max=40, color='severity_mean', hover_data=['count','severity_mean'], zoom=10, height=600)
+                    fig_map.update_layout(mapbox_style='open-street-map')
+                    st.plotly_chart(fig_map, width='stretch')
             else:
                 try:
                     fig_map = px.scatter_mapbox(locs_sample, lat='lat', lon='lon', color='BOROUGH' if 'BOROUGH' in locs_sample.columns else None,
@@ -441,9 +521,8 @@ if generate:
                                                 hover_data=['severity_score','YEAR'] if 'severity_score' in locs_sample.columns else ['YEAR'],
                                                 zoom=10, height=600)
                     fig_map.update_layout(mapbox_style='open-street-map')
-                    st.plotly_chart(fig_map, use_container_width=True)
+                    st.plotly_chart(fig_map, width='stretch')
                 except Exception:
-                    # fallback
                     st.map(locs_sample[['lat','lon']].rename(columns={'lat':'lat','lon':'lon'}))
         else:
             st.info('No location points available for the selected filters.')
@@ -452,42 +531,58 @@ if generate:
         st.subheader('Time series (yearly)')
         # Time series according to granularity; for Month/Day we use locations (has CRASH_DATETIME)
         if granularity == 'Year':
-            if 'YEAR' in dfv.columns:
-                ts = dfv.groupby('YEAR')['COUNT'].sum().reset_index()
-                fig_ts = px.line(ts.sort_values('YEAR'), x='YEAR', y='COUNT', markers=True, title='Crashes per Year')
-                st.plotly_chart(fig_ts, use_container_width=True)
-            else:
-                st.info('Year data not available')
+            try:
+                fig_ts = crashes_by_year(parquet_path=PAR_LOC, boroughs=boroughs or None, year_range=year_range)
+                st.plotly_chart(fig_ts, width='stretch')
+            except Exception:
+                if 'YEAR' in dfv.columns:
+                    ts = dfv.groupby('YEAR')['COUNT'].sum().reset_index()
+                    fig_ts = px.line(ts.sort_values('YEAR'), x='YEAR', y='COUNT', markers=True, title='Crashes per Year')
+                    st.plotly_chart(fig_ts, width='stretch')
+                else:
+                    st.info('Year data not available')
         else:
-            if 'CRASH_DATETIME' in locs.columns:
-                l = locs.dropna(subset=['CRASH_DATETIME'])
-                # apply borough/year filters to locations as well
-                if boroughs and 'BOROUGH' in l.columns:
-                    l = l[l['BOROUGH'].isin(boroughs)]
-                if 'YEAR' in l.columns:
-                    l = l[(l['YEAR'] >= year_range[0]) & (l['YEAR'] <= year_range[1])]
-                if granularity == 'Month':
-                    ts = l.groupby(pd.Grouper(key='CRASH_DATETIME', freq='M')).size().reset_index(name='COUNT')
+            try:
+                fig_ts = temporal_heatmap(parquet_path=PAR_LOC, boroughs=boroughs or None, year_range=year_range)
+                st.plotly_chart(fig_ts, width='stretch')
+            except Exception:
+                if 'CRASH_DATETIME' in locs.columns:
+                    l = locs.dropna(subset=['CRASH_DATETIME'])
+                    if boroughs and 'BOROUGH' in l.columns:
+                        l = l[l['BOROUGH'].isin(boroughs)]
+                    if 'YEAR' in l.columns:
+                        l = l[(l['YEAR'] >= year_range[0]) & (l['YEAR'] <= year_range[1])]
+                    if granularity == 'Month':
+                        ts = l.groupby(pd.Grouper(key='CRASH_DATETIME', freq='M')).size().reset_index(name='COUNT')
+                    else:
+                        ts = l.groupby(pd.Grouper(key='CRASH_DATETIME', freq='D')).size().reset_index(name='COUNT')
+                    if not ts.empty:
+                        fig_ts = px.line(ts, x=ts.columns[0], y='COUNT', markers=False, title=f'Crashes per {granularity}')
+                        st.plotly_chart(fig_ts, width='stretch')
+                    else:
+                        st.info('No events for selected filters/timeframe')
                 else:
-                    ts = l.groupby(pd.Grouper(key='CRASH_DATETIME', freq='D')).size().reset_index(name='COUNT')
-                if not ts.empty:
-                    fig_ts = px.line(ts, x=ts.columns[0], y='COUNT', markers=False, title=f'Crashes per {granularity}')
-                    st.plotly_chart(fig_ts, use_container_width=True)
-                else:
-                    st.info('No events for selected filters/timeframe')
-            else:
-                st.info('CRASH_DATETIME not present in locations; cannot build Month/Day timeseries')
+                    st.info('CRASH_DATETIME not present in locations; cannot build Month/Day timeseries')
 
     with tab_severity:
         st.subheader('Severity analysis')
-        if 'AVG_SEVERITY' in dfv.columns:
-            sev_b = dfv.groupby('BOROUGH')['AVG_SEVERITY'].mean().reset_index().sort_values('AVG_SEVERITY', ascending=False)
-            fig_sb = px.bar(sev_b, x='AVG_SEVERITY', y='BOROUGH', orientation='h', title='Average Severity by Borough')
-            st.plotly_chart(fig_sb, use_container_width=True)
-        if 'VEHICLE_TYPE' in dfv.columns:
-            sev_v = dfv.groupby('VEHICLE_TYPE')['AVG_SEVERITY'].mean().reset_index().sort_values('AVG_SEVERITY', ascending=False).head(20)
-            fig_sv = px.bar(sev_v, x='AVG_SEVERITY', y='VEHICLE_TYPE', orientation='h', title='Avg Severity by Vehicle (top 20)')
-            st.plotly_chart(fig_sv, use_container_width=True)
+        try:
+            fig_sb = severity_by_borough(parquet_path=PAR_LOC, boroughs=boroughs or None, year_range=year_range)
+            st.plotly_chart(fig_sb, width='stretch')
+        except Exception:
+            if 'AVG_SEVERITY' in dfv.columns:
+                sev_b = dfv.groupby('BOROUGH')['AVG_SEVERITY'].mean().reset_index().sort_values('AVG_SEVERITY', ascending=False)
+                fig_sb = px.bar(sev_b, x='AVG_SEVERITY', y='BOROUGH', orientation='h', title='Average Severity by Borough')
+                st.plotly_chart(fig_sb, width='stretch')
+
+        try:
+            fig_density = density_map(parquet_path=PAR_LOC, boroughs=boroughs or None, year_range=year_range)
+            st.plotly_chart(fig_density, width='stretch')
+        except Exception:
+            if 'VEHICLE_TYPE' in dfv.columns:
+                sev_v = dfv.groupby('VEHICLE_TYPE')['AVG_SEVERITY'].mean().reset_index().sort_values('AVG_SEVERITY', ascending=False).head(20)
+                fig_sv = px.bar(sev_v, x='AVG_SEVERITY', y='VEHICLE_TYPE', orientation='h', title='Avg Severity by Vehicle (top 20)')
+                st.plotly_chart(fig_sv, width='stretch')
 
     # allow download of the filtered summary
     st.markdown('---')
