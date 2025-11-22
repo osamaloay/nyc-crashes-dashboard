@@ -241,9 +241,19 @@ def duckdb_top_vehicles(n=30, boroughs=None, year_range=None):
         df['vehicle'] = df['vehicle'].astype(str).str.strip()
     return df
 
-meta = load_meta()
-summary = load_summary()
-locations = load_locations()
+try:
+    meta = load_meta()
+    summary = load_summary()
+    locations = load_locations()
+except Exception:
+    # In hosted environments (Streamlit Cloud) the parquet/csv artifacts
+    # may not be present at import time. Fail gracefully to avoid a hard
+    # ImportError — initialize empty fallbacks and allow the app to render
+    # a helpful message to the user instead.
+    meta = {}
+    import pandas as _pd
+    summary = _pd.DataFrame()
+    locations = _pd.DataFrame()
 
 # If metadata JSON was not available, create simple lists from the summary dataframe
 if not meta:
