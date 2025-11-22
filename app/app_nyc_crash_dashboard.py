@@ -264,11 +264,45 @@ if not meta:
         meta['vehicle_types'] = sorted(summary['VEHICLE_TYPE'].dropna().unique().tolist()) if 'VEHICLE_TYPE' in summary.columns else []
         meta['factors'] = sorted(summary['FACTOR'].dropna().unique().tolist()) if 'FACTOR' in summary.columns else []
 
+# Normalize and deduplicate vehicle/factor lists to reduce noisy duplicates
+def _clean_label_simple(s):
+    if s is None:
+        return ''
+    t = str(s).strip()
+    t = re.sub(r'[\[\]\(\)\{\}<>]', '', t)
+    t = re.sub(r"[^\w\s\-\/,&]", '', t)
+    t = re.sub(r"\s+", ' ', t)
+    return t.strip()
+
+def _unique_preserve(seq):
+    seen = set()
+    out = []
+    for v in seq:
+        k = (v or '')
+        if k not in seen:
+            seen.add(k)
+            out.append(v)
+    return out
+
+if meta.get('vehicle_types'):
+    cleaned = [_clean_label_simple(v) for v in meta['vehicle_types'] if v and str(v).strip()]
+    meta['vehicle_types'] = _unique_preserve(sorted(set(cleaned)))
+if meta.get('factors'):
+    cleaned = [_clean_label_simple(v) for v in meta['factors'] if v and str(v).strip()]
+    meta['factors'] = _unique_preserve(sorted(set(cleaned)))
+
 # Sidebar filters
+if 'generate' not in st.session_state:
+    st.session_state['generate'] = False
+
+def _trigger_generate():
+    st.session_state['generate'] = True
+
+
 with st.sidebar:
     st.header("Filters")
-    boroughs = st.multiselect("Borough", options=meta.get('boroughs', []), default=None)
-    years = st.multiselect("Year", options=meta.get('years', []), default=None)
+    boroughs = st.multiselect("Borough", options=meta.get('boroughs', []), default=None, key='boroughs', on_change=_trigger_generate)
+    years = st.multiselect("Year", options=meta.get('years', []), default=None, key='years', on_change=_trigger_generate)
     # Year range slider (falls back to summary/locations if metadata not precise)
     try:
         years_list = sorted([int(y) for y in meta.get('years', [])]) if meta.get('years') else []
@@ -277,11 +311,13 @@ with st.sidebar:
     except Exception:
         min_year, max_year = 2010, datetime.now().year
     year_range = st.slider('Year range', min_year, max_year, (min_year, max_year))
-    vehicles = st.multiselect("Vehicle Type", options=meta.get('vehicle_types', []), default=None)
-    factors = st.multiselect("Contributing Factor", options=meta.get('factors', []), default=None)
+    vehicles = st.multiselect("Vehicle Type", options=meta.get('vehicle_types', []), default=None, key='vehicles', on_change=_trigger_generate)
+    factors = st.multiselect("Contributing Factor", options=meta.get('factors', []), default=None, key='factors', on_change=_trigger_generate)
     injury_slider = st.slider("Minimum total injured", 0, int(summary['SUM_INJURED'].max() if not summary.empty else 0), 0)
-    search_text = st.text_input("Search (e.g. 'Brooklyn 2019 bicycle')", "")
-    generate = st.button("🔄 Generate Report")
+    search_text = st.text_input("Search (e.g. 'Brooklyn 2019 bicycle')", "", key='search_text', on_change=_trigger_generate)
+    generate_btn = st.button("🔄 Generate Report", key='generate_btn')
+    if generate_btn:
+        st.session_state['generate'] = True
 
     st.markdown("---")
     st.write("Map options")
@@ -294,7 +330,17 @@ with st.sidebar:
     cluster_precision = st.slider('Cluster precision (decimal degrees)', 2, 4, 3)
     st.markdown('---')
     st.write('Person-level options')
-    person_sample = st.slider('Person-level sample fraction', 0.01, 1.0, 0.05, step=0.01)
+    person_sample = st.slider('Person-level sample fraction', 0.01, 1.0, 0.05, step=0.01, key='person_sample')
+
+# Read controls from session_state so callbacks/update paths work consistently
+_st = st.session_state
+boroughs = _st.get('boroughs', boroughs)
+years = _st.get('years', years)
+vehicles = _st.get('vehicles', vehicles)
+factors = _st.get('factors', factors)
+search_text = _st.get('search_text', search_text)
+person_sample = _st.get('person_sample', person_sample)
+generate = _st.get('generate', False)
 
 # Apply filters on button click or default initial run
 def apply_filters(df):
@@ -322,7 +368,7 @@ def apply_filters(df):
               d['YEAR'].astype(str).str.contains(q, na=False)]
     return d
 
-if generate:
+if st.session_state.get('generate', False):
     st.info("Applying filters and generating figures...")
     dfv = apply_filters(summary)
 
