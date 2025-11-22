@@ -23,6 +23,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
+import os
 
 # Dark Plotly template and borough colors for the app's dark UI
 DARK_TEMPLATE = dict(
@@ -229,7 +230,8 @@ def crashes_by_year(parquet_path: str = 'crash_locations.parquet', con: duckdb.D
     con, close = _open_con(con)
     try:
         col = _detect_col_fn(parquet_path, con)
-        where = _build_where(boroughs, None, col_fn=col)
+        # honor the year_range filter when provided
+        where = _build_where(boroughs, year_range, col_fn=col)
         dt_col = col('CRASH_DATETIME')
         borough_col = col('BOROUGH')
         year_expr = f"EXTRACT(year FROM TRY_CAST({dt_col} AS TIMESTAMP))::INT"
@@ -430,11 +432,25 @@ def density_map(parquet_path: str = 'crash_locations.parquet', con: duckdb.DuckD
 
 def safety_vs_injury(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.DuckDBPyConnection = None,
                      boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None,
-                     sample_frac: Optional[float] = None):
+                     sample_frac: Optional[float] = None, extra_filter_sql: str = ''):
     """Compare safety equipment usage vs injury categories (stacked bars).
 
     Returns a stacked bar chart of counts of `person_injury` by `safety_equipment`.
     """
+    # Prefer preaggregated parquet if available and no extra SQL filters are requested
+    agg_path = os.path.join('data', 'person_aggregates', 'safety_vs_injury.parquet')
+    if not extra_filter_sql and os.path.exists(agg_path):
+        try:
+            df = pd.read_parquet(agg_path)
+            if df.empty:
+                return go.Figure()
+            df['safety'] = df['safety'].astype(str)
+            fig = px.bar(df, x='safety', y='cnt', color='injury', title='Safety Equipment vs Injury (counts)')
+            fig.update_layout(template=DARK_TEMPLATE, barmode='stack', xaxis_title='Safety equipment', yaxis_title='Count')
+            return fig
+        except Exception:
+            # fall back to live query
+            pass
     con, close = _open_con(con)
     try:
         col = _detect_col_fn(parquet_path, con)
@@ -448,13 +464,14 @@ def safety_vs_injury(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.Duck
             # DuckDB: use random() for sampling
             sample_clause = f" AND random() < {float(sample_frac)}"
 
+        extra_clause = f" AND ({extra_filter_sql})" if extra_filter_sql else ''
         sql = f"""
         SELECT
             coalesce(NULLIF(lower(trim(replace(replace({safety_col}, '[', ''), ']', ''))),''),'Unknown') AS safety,
             coalesce(NULLIF(trim({injury_col}),'') ,'Unknown') AS injury,
             COUNT(*) AS cnt
         FROM parquet_scan('{parquet_path}')
-        WHERE {where} {sample_clause}
+        WHERE {where} {sample_clause} {extra_clause}
         GROUP BY safety, injury
         ORDER BY cnt DESC
         LIMIT 1000
@@ -475,8 +492,19 @@ def safety_vs_injury(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.Duck
 
 def injuries_by_hour(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.DuckDBPyConnection = None,
                      boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None,
-                     sample_frac: Optional[float] = None):
+                     sample_frac: Optional[float] = None, extra_filter_sql: str = ''):
     """Counts of injuries by hour of day (0-23)."""
+    agg_path = os.path.join('data', 'person_aggregates', 'injuries_by_hour.parquet')
+    if not extra_filter_sql and os.path.exists(agg_path):
+        try:
+            df = pd.read_parquet(agg_path)
+            if df.empty:
+                return go.Figure()
+            fig = px.bar(df, x='hour', y='cnt', color='injury', title='Injuries by Hour of Day')
+            fig.update_layout(template=DARK_TEMPLATE, barmode='stack', xaxis=dict(dtick=1))
+            return fig
+        except Exception:
+            pass
     con, close = _open_con(con)
     try:
         col = _detect_col_fn(parquet_path, con)
@@ -489,12 +517,13 @@ def injuries_by_hour(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.Duck
         if sample_frac and 0 < sample_frac < 1:
             sample_clause = f" AND random() < {float(sample_frac)}"
 
+        extra_clause = f" AND ({extra_filter_sql})" if extra_filter_sql else ''
         sql = f"""
         SELECT EXTRACT(hour FROM TRY_CAST({dt_col} AS TIMESTAMP)) AS hour,
                coalesce(NULLIF(trim({injury_col}),''),'Unknown') AS injury,
                COUNT(*) AS cnt
         FROM parquet_scan('{parquet_path}')
-        WHERE {where} {sample_clause} AND {dt_col} IS NOT NULL
+        WHERE {where} {sample_clause} {extra_clause} AND {dt_col} IS NOT NULL
         GROUP BY hour, injury
         ORDER BY hour
         """
@@ -512,14 +541,27 @@ def injuries_by_hour(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.Duck
 
 
 def age_group_counts(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.DuckDBPyConnection = None,
-                     boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None):
+                     boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None,
+                     extra_filter_sql: str = ''):
     """Counts by age groups (0-18, 19-30, 31-50, 51+)."""
+    agg_path = os.path.join('data', 'person_aggregates', 'age_group_counts.parquet')
+    if not extra_filter_sql and os.path.exists(agg_path):
+        try:
+            df = pd.read_parquet(agg_path)
+            if df.empty:
+                return go.Figure()
+            fig = px.bar(df.sort_values('age_group'), x='age_group', y='cnt', title='Crashes by Age Group')
+            fig.update_layout(template=DARK_TEMPLATE)
+            return fig
+        except Exception:
+            pass
     con, close = _open_con(con)
     try:
         col = _detect_col_fn(parquet_path, con)
         age = col('person_age')
         age_col = _quote_ident(age)
         where = _build_where(boroughs, year_range, col_fn=col)
+        extra_clause = f" AND ({extra_filter_sql})" if extra_filter_sql else ''
         sql = f"""
         SELECT CASE WHEN TRY_CAST({age_col} AS INTEGER) <= 18 THEN '0-18'
                 WHEN TRY_CAST({age_col} AS INTEGER) <= 30 THEN '19-30'
@@ -528,7 +570,7 @@ def age_group_counts(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.Duck
                 ELSE 'Unknown' END AS age_group,
                COUNT(*) AS cnt
         FROM parquet_scan('{parquet_path}')
-        WHERE {where}
+        WHERE {where} {extra_clause}
         GROUP BY age_group
         ORDER BY cnt DESC
         """
@@ -545,8 +587,20 @@ def age_group_counts(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.Duck
 
 
 def severity_by_gender(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.DuckDBPyConnection = None,
-                       boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None):
+                       boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None,
+                       extra_filter_sql: str = ''):
     """Compare injury categories by sex/gender."""
+    agg_path = os.path.join('data', 'person_aggregates', 'severity_by_gender.parquet')
+    if not extra_filter_sql and os.path.exists(agg_path):
+        try:
+            df = pd.read_parquet(agg_path)
+            if df.empty:
+                return go.Figure()
+            fig = px.bar(df, x='sex', y='cnt', color='injury', title='Injury Severity by Gender')
+            fig.update_layout(template=DARK_TEMPLATE, barmode='stack')
+            return fig
+        except Exception:
+            pass
     con, close = _open_con(con)
     try:
         col = _detect_col_fn(parquet_path, con)
@@ -555,12 +609,13 @@ def severity_by_gender(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.Du
         sex_col = _quote_ident(sex)
         injury_col = _quote_ident(injury)
         where = _build_where(boroughs, year_range, col_fn=col)
+        extra_clause = f" AND ({extra_filter_sql})" if extra_filter_sql else ''
         sql = f"""
         SELECT coalesce(NULLIF(trim({sex_col}),'Unknown'),'Unknown') AS sex,
                coalesce(NULLIF(trim({injury_col}),'Unknown'),'Unknown') AS injury,
                COUNT(*) AS cnt
         FROM parquet_scan('{parquet_path}')
-        WHERE {where}
+        WHERE {where} {extra_clause}
         GROUP BY sex, injury
         ORDER BY cnt DESC
         """
@@ -577,8 +632,21 @@ def severity_by_gender(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.Du
 
 
 def person_type_injury_rates(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.DuckDBPyConnection = None,
-                              boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None):
+                              boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None,
+                              extra_filter_sql: str = ''):
     """Compare injury rates (percent injured) across person types (Pedestrian, Bicyclist, Occupant, etc.)."""
+    agg_path = os.path.join('data', 'person_aggregates', 'person_type_injury_rates.parquet')
+    if not extra_filter_sql and os.path.exists(agg_path):
+        try:
+            df = pd.read_parquet(agg_path)
+            if df.empty:
+                return go.Figure()
+            df['rate'] = df['injured'] / df['total']
+            fig = px.bar(df.sort_values('rate', ascending=False), x='person_type', y='rate', title='Injury Rate by Person Type', labels={'rate':'Injury rate'})
+            fig.update_layout(template=DARK_TEMPLATE)
+            return fig
+        except Exception:
+            pass
     con, close = _open_con(con)
     try:
         col = _detect_col_fn(parquet_path, con)
@@ -587,12 +655,13 @@ def person_type_injury_rates(parquet_path: str = 'nyc_crashes.parquet', con: duc
         ptype_col = _quote_ident(ptype)
         injury_col = _quote_ident(injury)
         where = _build_where(boroughs, year_range, col_fn=col)
+        extra_clause = f" AND ({extra_filter_sql})" if extra_filter_sql else ''
         sql = f"""
         SELECT coalesce(NULLIF(trim({ptype_col}),'Unknown'),'Unknown') AS person_type,
                SUM(CASE WHEN {injury_col} IS NOT NULL AND lower(trim({injury_col})) NOT IN ('no injury','none','unknown','') THEN 1 ELSE 0 END) AS injured,
                COUNT(*) AS total
         FROM parquet_scan('{parquet_path}')
-        WHERE {where}
+        WHERE {where} {extra_clause}
         GROUP BY person_type
         ORDER BY injured DESC
         """
@@ -610,8 +679,20 @@ def person_type_injury_rates(parquet_path: str = 'nyc_crashes.parquet', con: duc
 
 
 def ejection_vs_severity(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.DuckDBPyConnection = None,
-                         boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None):
+                         boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None,
+                         extra_filter_sql: str = ''):
     """Show distribution of injury categories by ejection status."""
+    agg_path = os.path.join('data', 'person_aggregates', 'ejection_vs_severity.parquet')
+    if not extra_filter_sql and os.path.exists(agg_path):
+        try:
+            df = pd.read_parquet(agg_path)
+            if df.empty:
+                return go.Figure()
+            fig = px.bar(df, x='ejection', y='cnt', color='injury', title='Ejection vs Injury Severity')
+            fig.update_layout(template=DARK_TEMPLATE, barmode='stack')
+            return fig
+        except Exception:
+            pass
     con, close = _open_con(con)
     try:
         col = _detect_col_fn(parquet_path, con)
@@ -620,12 +701,13 @@ def ejection_vs_severity(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.
         eject_col = _quote_ident(eject)
         injury_col = _quote_ident(injury)
         where = _build_where(boroughs, year_range, col_fn=col)
+        extra_clause = f" AND ({extra_filter_sql})" if extra_filter_sql else ''
         sql = f"""
         SELECT coalesce(NULLIF(trim({eject_col}),'Unknown'),'Unknown') AS ejection,
                coalesce(NULLIF(trim({injury_col}),'Unknown'),'Unknown') AS injury,
                COUNT(*) AS cnt
         FROM parquet_scan('{parquet_path}')
-        WHERE {where}
+        WHERE {where} {extra_clause}
         GROUP BY ejection, injury
         ORDER BY cnt DESC
         """
@@ -642,8 +724,20 @@ def ejection_vs_severity(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.
 
 
 def position_vs_severity(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.DuckDBPyConnection = None,
-                         boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None):
+                         boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None,
+                         extra_filter_sql: str = ''):
     """Compare injury categories for Driver vs Passenger positions."""
+    agg_path = os.path.join('data', 'person_aggregates', 'position_vs_severity.parquet')
+    if not extra_filter_sql and os.path.exists(agg_path):
+        try:
+            df = pd.read_parquet(agg_path)
+            if df.empty:
+                return go.Figure()
+            fig = px.bar(df, x='position', y='cnt', color='injury', title='Position in Vehicle vs Injury Severity')
+            fig.update_layout(template=DARK_TEMPLATE, barmode='stack')
+            return fig
+        except Exception:
+            pass
     con, close = _open_con(con)
     try:
         col = _detect_col_fn(parquet_path, con)
@@ -652,12 +746,13 @@ def position_vs_severity(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.
         pos_col = _quote_ident(pos)
         injury_col = _quote_ident(injury)
         where = _build_where(boroughs, year_range, col_fn=col)
+        extra_clause = f" AND ({extra_filter_sql})" if extra_filter_sql else ''
         sql = f"""
         SELECT coalesce(NULLIF(trim({pos_col}),'Unknown'),'Unknown') AS position,
                coalesce(NULLIF(trim({injury_col}),'Unknown'),'Unknown') AS injury,
                COUNT(*) AS cnt
         FROM parquet_scan('{parquet_path}')
-        WHERE {where}
+        WHERE {where} {extra_clause}
         GROUP BY position, injury
         ORDER BY cnt DESC
         """
@@ -674,8 +769,20 @@ def position_vs_severity(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.
 
 
 def weekday_weekend_injuries(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.DuckDBPyConnection = None,
-                             boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None):
+                             boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None,
+                             extra_filter_sql: str = ''):
     """Compare injured crash counts on Weekday vs Weekend."""
+    agg_path = os.path.join('data', 'person_aggregates', 'weekday_weekend_injuries.parquet')
+    if not extra_filter_sql and os.path.exists(agg_path):
+        try:
+            df = pd.read_parquet(agg_path)
+            if df.empty:
+                return go.Figure()
+            fig = px.bar(df, x='day_type', y='injured', title='Weekday vs Weekend Injuries')
+            fig.update_layout(template=DARK_TEMPLATE)
+            return fig
+        except Exception:
+            pass
     con, close = _open_con(con)
     try:
         col = _detect_col_fn(parquet_path, con)
@@ -684,11 +791,12 @@ def weekday_weekend_injuries(parquet_path: str = 'nyc_crashes.parquet', con: duc
         dt_col = _quote_ident(dt)
         injury_col = _quote_ident(injury)
         where = _build_where(boroughs, year_range, col_fn=col)
+        extra_clause = f" AND ({extra_filter_sql})" if extra_filter_sql else ''
         sql = f"""
         SELECT CASE WHEN strftime('%w', TRY_CAST({dt_col} AS TIMESTAMP)) IN ('0','6') THEN 'Weekend' ELSE 'Weekday' END AS day_type,
                SUM(CASE WHEN {injury_col} IS NOT NULL AND lower(trim({injury_col})) NOT IN ('no injury','none','unknown','') THEN 1 ELSE 0 END) AS injured
         FROM parquet_scan('{parquet_path}')
-        WHERE {where} AND {dt_col} IS NOT NULL
+        WHERE {where} {extra_clause} AND {dt_col} IS NOT NULL
         GROUP BY day_type
         """
         df = con.execute(sql).df()
@@ -704,11 +812,24 @@ def weekday_weekend_injuries(parquet_path: str = 'nyc_crashes.parquet', con: duc
 
 
 def motorcycle_vs_car_fatalities(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.DuckDBPyConnection = None,
-                                 boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None):
+                                 boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None,
+                                 extra_filter_sql: str = ''):
     """Compare fatality counts and rates for motorcycles vs cars.
 
     This uses simple keyword matching on `vehicle_type` to detect motorcycles.
     """
+    agg_path = os.path.join('data', 'person_aggregates', 'motorcycle_vs_car_fatalities.parquet')
+    if not extra_filter_sql and os.path.exists(agg_path):
+        try:
+            df = pd.read_parquet(agg_path)
+            if df.empty:
+                return go.Figure()
+            df['fatality_rate'] = df['fatalities'] / df['total']
+            fig = px.bar(df, x='vtype', y='fatality_rate', title='Fatality Rate: Motorcycle vs Car', labels={'fatality_rate':'Fatalities per person'})
+            fig.update_layout(template=DARK_TEMPLATE)
+            return fig
+        except Exception:
+            pass
     con, close = _open_con(con)
     try:
         col = _detect_col_fn(parquet_path, con)
@@ -717,6 +838,7 @@ def motorcycle_vs_car_fatalities(parquet_path: str = 'nyc_crashes.parquet', con:
         vcol_col = _quote_ident(vcol)
         injury_col = _quote_ident(injury)
         where = _build_where(boroughs, year_range, col_fn=col)
+        extra_clause = f" AND ({extra_filter_sql})" if extra_filter_sql else ''
         sql = f"""
         SELECT
             CASE WHEN lower({vcol_col}) LIKE '%motor%' OR lower({vcol_col}) LIKE '%bike%' THEN 'Motorcycle'
@@ -725,7 +847,7 @@ def motorcycle_vs_car_fatalities(parquet_path: str = 'nyc_crashes.parquet', con:
             SUM(CASE WHEN lower(COALESCE({injury_col},'')) LIKE '%kill%' OR lower(COALESCE({injury_col},'')) LIKE '%fatal%' THEN 1 ELSE 0 END) AS fatalities,
             COUNT(*) AS total
         FROM parquet_scan('{parquet_path}')
-        WHERE {where}
+        WHERE {where} {extra_clause}
         GROUP BY vtype
         """
         df = con.execute(sql).df()
@@ -742,8 +864,27 @@ def motorcycle_vs_car_fatalities(parquet_path: str = 'nyc_crashes.parquet', con:
 
 
 def borough_vs_injury(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.DuckDBPyConnection = None,
-                      boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None):
-    """Show distribution of injury types by borough (stacked bars)."""
+                      boroughs: Optional[List[str]] = None, year_range: Optional[List[int]] = None,
+                      extra_filter_sql: str = ''):
+    """Show distribution of injury types by borough (stacked bars).
+
+    Accepts `extra_filter_sql` so person-level filters can be applied when called
+    from the dashboard. When `extra_filter_sql` is empty and a preaggregated
+    parquet exists, the function will read the preaggregate for speed.
+    """
+    # Prefer preaggregate when available and no extra SQL filtering requested
+    agg_path = os.path.join('data', 'person_aggregates', 'borough_vs_injury.parquet')
+    if not extra_filter_sql and os.path.exists(agg_path):
+        try:
+            df = pd.read_parquet(agg_path)
+            if df.empty:
+                return go.Figure()
+            fig = px.bar(df, x='borough', y='cnt', color='injury', title='Injury Types by Borough')
+            fig.update_layout(template=DARK_TEMPLATE, barmode='stack')
+            return fig
+        except Exception:
+            pass
+
     con, close = _open_con(con)
     try:
         col = _detect_col_fn(parquet_path, con)
@@ -752,12 +893,13 @@ def borough_vs_injury(parquet_path: str = 'nyc_crashes.parquet', con: duckdb.Duc
         bcol_col = _quote_ident(bcol)
         injury_col = _quote_ident(injury)
         where = _build_where(boroughs, year_range, col_fn=col)
+        extra_clause = f" AND ({extra_filter_sql})" if extra_filter_sql else ''
         sql = f"""
         SELECT coalesce(NULLIF(trim({bcol_col}),'Unknown'),'Unknown') AS borough,
                coalesce(NULLIF(trim({injury_col}),'Unknown'),'Unknown') AS injury,
                COUNT(*) AS cnt
         FROM parquet_scan('{parquet_path}')
-        WHERE {where}
+        WHERE {where} {extra_clause}
         GROUP BY borough, injury
         ORDER BY borough
         """

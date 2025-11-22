@@ -7,7 +7,7 @@ Original file is located at
     https://colab.research.google.com/drive/1cg4_VHvsYeCEWqraHmMBpXxEzduL3bLR
 """
 
-!pip install dash==2.15.0 dash-bootstrap-components pyngrok plotly pandas
+
 
 df = pd.read_csv("merged_cleaned_dataset.csv")
 

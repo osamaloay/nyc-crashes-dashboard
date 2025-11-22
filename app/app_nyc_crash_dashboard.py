@@ -10,7 +10,7 @@ import os
 import sys
 from datetime import datetime
 
-# Ensure the repository root is on sys.path so `import app.*` works when
+#  root is on sys.path so `import app.*` works when
 # Streamlit runs this file as a script (Streamlit executes the file directly,
 # which can cause the package root to be missing from sys.path).
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -303,14 +303,9 @@ with st.sidebar:
     st.header("Filters")
     boroughs = st.multiselect("Borough", options=meta.get('boroughs', []), default=None, key='boroughs', on_change=_trigger_generate)
     years = st.multiselect("Year", options=meta.get('years', []), default=None, key='years', on_change=_trigger_generate)
-    # Year range slider (falls back to summary/locations if metadata not precise)
-    try:
-        years_list = sorted([int(y) for y in meta.get('years', [])]) if meta.get('years') else []
-        min_year = years_list[0] if years_list else (int(summary['YEAR'].min()) if 'YEAR' in summary.columns else 2010)
-        max_year = years_list[-1] if years_list else (int(summary['YEAR'].max()) if 'YEAR' in summary.columns else datetime.now().year)
-    except Exception:
-        min_year, max_year = 2010, datetime.now().year
-    year_range = st.slider('Year range', min_year, max_year, (min_year, max_year))
+    # Note: prefer explicit Year multiselect. Compute year_range from selection.
+    # Remove redundant slider to avoid confusion.
+    year_range = None
     vehicles = st.multiselect("Vehicle Type", options=meta.get('vehicle_types', []), default=None, key='vehicles', on_change=_trigger_generate)
     factors = st.multiselect("Contributing Factor", options=meta.get('factors', []), default=None, key='factors', on_change=_trigger_generate)
     injury_slider = st.slider("Minimum total injured", 0, int(summary['SUM_INJURED'].max() if not summary.empty else 0), 0)
@@ -332,6 +327,55 @@ with st.sidebar:
     st.write('Person-level options')
     person_sample = st.slider('Person-level sample fraction', 0.01, 1.0, 0.05, step=0.01, key='person_sample')
 
+    # Person-level filters (apply to person-level queries)
+    st.markdown('---')
+    st.write('Person filters')
+    # Try to populate person-level choices from raw person parquet if present
+    person_pq = os.path.join(os.getcwd(), 'nyc_crashes.parquet')
+    person_type_opts = []
+    person_sex_opts = []
+    try:
+        if os.path.exists(person_pq):
+            con = duckdb.connect(database=':memory:')
+            try:
+                # detect column names tolerant to common variants
+                cols = [c for c in con.execute(f"SELECT * FROM parquet_scan('{person_pq.replace('\\','/')}') LIMIT 0").df().columns]
+                # attempt person_type-like columns
+                candidates = [c for c in cols if 'person' in c.lower() and 'type' in c.lower()]
+                pcol = candidates[0] if candidates else ( 'person_type' if 'person_type' in cols else None)
+                if pcol:
+                    q = f"SELECT DISTINCT TRIM({pcol}) AS val FROM parquet_scan('{person_pq.replace('\\','/')}') WHERE {pcol} IS NOT NULL"
+                    person_type_opts = [r[0] for r in con.execute(q).fetchall() if r[0] and str(r[0]).strip()]
+                # sex/gender
+                candidates = [c for c in cols if any(x in c.lower() for x in ['sex','gender'])]
+                scol = candidates[0] if candidates else ( 'person_sex' if 'person_sex' in cols else None)
+                if scol:
+                    q = f"SELECT DISTINCT TRIM({scol}) AS val FROM parquet_scan('{person_pq.replace('\\','/')}') WHERE {scol} IS NOT NULL"
+                    person_sex_opts = [r[0] for r in con.execute(q).fetchall() if r[0] and str(r[0]).strip()]
+            finally:
+                con.close()
+    except Exception:
+        person_type_opts = []
+        person_sex_opts = []
+
+    # normalize options
+    person_type_opts = sorted(set([str(x).strip() for x in person_type_opts if x]))
+    person_sex_opts = sorted(set([str(x).strip() for x in person_sex_opts if x]))
+
+    # Dropdowns (reactive)
+    if person_type_opts:
+        person_type = st.multiselect('Person type', options=person_type_opts, default=None, key='person_type', on_change=_trigger_generate)
+    else:
+        person_type = st.text_input('Person type (comma-separated, e.g. Pedestrian,Bicyclist,Driver)', '', key='person_type')
+    if person_sex_opts:
+        person_sex = st.multiselect('Person sex/gender', options=person_sex_opts, default=None, key='person_sex', on_change=_trigger_generate)
+    else:
+        person_sex = st.multiselect('Person sex/gender', options=['Male','Female','Unknown','Other'], default=None, key='person_sex', on_change=_trigger_generate)
+    min_age = st.number_input('Min person age', min_value=0, max_value=120, value=0, key='min_age', on_change=_trigger_generate)
+    max_age = st.number_input('Max person age', min_value=0, max_value=120, value=120, key='max_age', on_change=_trigger_generate)
+    injured_only = st.checkbox('Only include injured persons (person-level)', value=False, key='injured_only', on_change=_trigger_generate)
+    use_preaggregates = st.checkbox('Prefer preaggregated person Parquets (fast, may ignore fine-grained filters)', value=True, key='use_preaggregates')
+
 # Read controls from session_state so callbacks/update paths work consistently
 _st = st.session_state
 boroughs = _st.get('boroughs', boroughs)
@@ -340,6 +384,12 @@ vehicles = _st.get('vehicles', vehicles)
 factors = _st.get('factors', factors)
 search_text = _st.get('search_text', search_text)
 person_sample = _st.get('person_sample', person_sample)
+person_type = _st.get('person_type', person_type)
+person_sex = _st.get('person_sex', person_sex)
+min_age = _st.get('min_age', min_age)
+max_age = _st.get('max_age', max_age)
+injured_only = _st.get('injured_only', injured_only)
+use_preaggregates = _st.get('use_preaggregates', True)
 generate = _st.get('generate', False)
 
 # Apply filters on button click or default initial run
@@ -349,28 +399,54 @@ def apply_filters(df):
         d = d[d['BOROUGH'].isin(boroughs)]
     # apply either explicit years selection or year_range slider
     if years:
-        d = d[d['YEAR'].isin(years)]
-    else:
-        if 'YEAR' in d.columns:
-            d = d[(d['YEAR'] >= year_range[0]) & (d['YEAR'] <= year_range[1])]
+        # case-insensitive numeric matching or string
+        try:
+            yr_vals = [int(y) for y in years]
+            d = d[d['YEAR'].astype(int).isin(yr_vals)]
+        except Exception:
+            d = d[d['YEAR'].isin(years)]
     if vehicles:
-        d = d[d['VEHICLE_TYPE'].isin(vehicles)]
+        # case-insensitive match
+        if 'VEHICLE_TYPE' in d.columns:
+            sels = [str(v).lower() for v in vehicles]
+            d = d[d['VEHICLE_TYPE'].astype(str).str.lower().isin(sels)]
     if factors:
-        d = d[d['FACTOR'].isin(factors)]
+        if 'FACTOR' in d.columns:
+            sels = [str(v).lower() for v in factors]
+            d = d[d['FACTOR'].astype(str).str.lower().isin(sels)]
     if injury_slider:
         d = d[d['SUM_INJURED'] >= injury_slider]
     # basic search: look for words in borough/vehicle/factor fields or year
     if search_text:
         q = search_text.lower()
-        d = d[d['BOROUGH'].str.lower().str.contains(q, na=False) |
-              d['VEHICLE_TYPE'].str.lower().str.contains(q, na=False) |
-              d['FACTOR'].str.lower().str.contains(q, na=False) |
-              d['YEAR'].astype(str).str.contains(q, na=False)]
+        cols_to_check = []
+        for c in ['BOROUGH','VEHICLE_TYPE','FACTOR']:
+            if c in d.columns:
+                cols_to_check.append(d[c].astype(str).str.lower().str.contains(q, na=False))
+        if 'YEAR' in d.columns:
+            cols_to_check.append(d['YEAR'].astype(str).str.contains(q, na=False))
+        if cols_to_check:
+            mask = cols_to_check[0]
+            for m in cols_to_check[1:]:
+                mask = mask | m
+            d = d[mask]
     return d
+
+# Build effective year_range from explicit years selection if provided
+if years:
+    try:
+        yr_vals = [int(y) for y in years]
+        year_range = (min(yr_vals), max(yr_vals))
+    except Exception:
+        year_range = None
 
 if st.session_state.get('generate', False):
     st.info("Applying filters and generating figures...")
     dfv = apply_filters(summary)
+
+    # detect preaggregates (optional, used if user asked for preaggregates)
+    AGG_DIR = os.path.join('data', 'person_aggregates')
+    has_preagg = os.path.isdir(AGG_DIR) and any(fname.endswith('.parquet') for fname in os.listdir(AGG_DIR))
 
     # Prepare a dataframe of locations for mapping; ensure lat/lon column names
     locs = locations.copy()
@@ -500,6 +576,17 @@ if st.session_state.get('generate', False):
                     fig_b.update_traces(textinfo='percent+label')
                 st.plotly_chart(fig_b, width='stretch')
 
+            # Correlation heatmap for numeric summary columns (quick insight)
+            numeric_cols = [c for c in dfv.columns if c.upper() in ('SUM_INJURED','SUM_KILLED','AVG_SEVERITY','COUNT') or dfv[c].dtype.kind in 'biuf']
+            if len(numeric_cols) >= 2:
+                try:
+                    corr = dfv[numeric_cols].corr().fillna(0)
+                    fig_corr = px.imshow(corr, text_auto='.2f', title='Numeric Columns Correlation (filtered)')
+                    fig_corr.update_layout(template=None)
+                    st.plotly_chart(fig_corr, width='stretch')
+                except Exception:
+                    pass
+
     with tab_vehicles:
         st.subheader("Top vehicle types")
         # Use DuckDB on-demand aggregation for top vehicles when raw dataset is available; fallback to summary
@@ -514,6 +601,18 @@ if st.session_state.get('generate', False):
                 top_veh = top_veh.rename(columns={'VEHICLE_TYPE':'vehicle','COUNT':'count'})
             fig_v = px.bar(top_veh, x='count', y=top_veh.columns[0], orientation='h', title='Top Vehicle Types')
             st.plotly_chart(fig_v, width='stretch')
+
+        # Comparative area chart for vehicle trends over years (if dfv has YEAR)
+        if 'YEAR' in dfv.columns and 'VEHICLE_TYPE' in dfv.columns:
+            try:
+                veh_pivot = dfv.pivot_table(index='YEAR', columns='VEHICLE_TYPE', values='COUNT', aggfunc='sum', fill_value=0)
+                top_cols = veh_pivot.sum().sort_values(ascending=False).head(8).index.tolist()
+                if top_cols:
+                    df_area = veh_pivot[top_cols].reset_index().melt(id_vars='YEAR', value_name='count', var_name='vehicle')
+                    fig_area = px.area(df_area, x='YEAR', y='count', color='vehicle', title='Top Vehicles Over Time')
+                    st.plotly_chart(fig_area, width='stretch')
+            except Exception:
+                pass
 
         st.markdown("### Vehicle trends by year")
         # Vehicle trends: Year granularity uses summary; for Month/Day we can run an on-demand DuckDB query against the raw dataset
@@ -552,21 +651,63 @@ if st.session_state.get('generate', False):
         st.subheader('Person-level analysis')
         st.markdown('Use sampling to limit scan size when raw person-level tables are large.')
 
+        # Build person-level extra_sql once so all person charts use the same filters
+        extra_clauses = []
+        if person_type:
+            # person_type may be a list (multiselect) or comma-separated string
+            if isinstance(person_type, (list,tuple)):
+                pts = [p.strip() for p in person_type if p and str(p).strip()]
+            else:
+                pts = [p.strip() for p in str(person_type).split(',') if p.strip()]
+            if pts:
+                esc = ','.join(f"lower('{p.replace("'","''")}')" for p in pts)
+                extra_clauses.append(f"lower(coalesce(person_type,'')) IN ({esc})")
+        if person_sex:
+            if isinstance(person_sex, (list,tuple)):
+                sexes_list = [s for s in person_sex if s and str(s).strip()]
+            else:
+                sexes_list = [s.strip() for s in str(person_sex).split(',') if s.strip()]
+            if sexes_list:
+                sexes = ','.join(f"lower('{s.replace("'","''")}')" for s in sexes_list)
+                extra_clauses.append(f"lower(coalesce(person_sex,'')) IN ({sexes})")
+        if min_age is not None:
+            extra_clauses.append(f"TRY_CAST(coalesce(person_age,'') AS INTEGER) >= {int(min_age)}")
+        if max_age is not None:
+            extra_clauses.append(f"TRY_CAST(coalesce(person_age,'') AS INTEGER) <= {int(max_age)}")
+        if injured_only:
+            extra_clauses.append("lower(coalesce(person_injury,'')) NOT IN ('no injury','none','unknown','')")
+        extra_sql = ' AND '.join(extra_clauses)
+
+        # If using preaggregates, and they exist, surface a small notice and download buttons
+        if use_preaggregates and 'AGG_DIR' in globals() and has_preagg:
+            st.info(f'Using preaggregated Parquets from `{AGG_DIR}` — some person filters may be ignored by preaggregates.')
+            try:
+                for fpath in sorted([f for f in os.listdir(AGG_DIR) if f.endswith('.parquet')]):
+                    full = os.path.join(AGG_DIR, fpath)
+                    try:
+                        with open(full, 'rb') as fh:
+                            st.download_button(f'Download {fpath}', data=fh, file_name=fpath)
+                    except Exception:
+                        # ignore individual file read errors
+                        pass
+            except Exception:
+                pass
+
         # Row 1: Safety vs Injury and Injuries by Hour
         r1c1, r1c2 = st.columns([2,3])
         with r1c1:
             st.markdown('**Q1 — Safety equipment vs injury**')
             try:
-                fig_safety = safety_vs_injury(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, sample_frac=person_sample)
-                st.plotly_chart(fig_safety, use_container_width=True)
+                fig_safety = safety_vs_injury(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, sample_frac=person_sample, extra_filter_sql=extra_sql)
+                st.plotly_chart(fig_safety, width='stretch')
             except Exception as e:
                 st.error('Could not build Safety vs Injury chart: ' + str(e))
 
         with r1c2:
             st.markdown('**Q2 — Injuries by Hour**')
             try:
-                fig_hour = injuries_by_hour(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, sample_frac=person_sample)
-                st.plotly_chart(fig_hour, use_container_width=True)
+                fig_hour = injuries_by_hour(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, sample_frac=person_sample, extra_filter_sql=extra_sql)
+                st.plotly_chart(fig_hour, width='stretch')
             except Exception as e:
                 st.error('Could not build Injuries by Hour chart: ' + str(e))
 
@@ -575,16 +716,16 @@ if st.session_state.get('generate', False):
         with r2c1:
             st.markdown('**Q3 — Age group counts**')
             try:
-                fig_ageg = age_group_counts(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
-                st.plotly_chart(fig_ageg, use_container_width=True)
+                fig_ageg = age_group_counts(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, extra_filter_sql=extra_sql)
+                st.plotly_chart(fig_ageg, width='stretch')
             except Exception as e:
                 st.error('Could not build Age Group chart: ' + str(e))
 
         with r2c2:
             st.markdown('**Q4 — Severity by Gender**')
             try:
-                fig_gender = severity_by_gender(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
-                st.plotly_chart(fig_gender, use_container_width=True)
+                fig_gender = severity_by_gender(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, extra_filter_sql=extra_sql)
+                st.plotly_chart(fig_gender, width='stretch')
             except Exception as e:
                 st.error('Could not build Severity by Gender chart: ' + str(e))
 
@@ -593,16 +734,16 @@ if st.session_state.get('generate', False):
         with r3c1:
             st.markdown('**Q5 — Injury rate by Person Type**')
             try:
-                fig_pt = person_type_injury_rates(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
-                st.plotly_chart(fig_pt, use_container_width=True)
+                fig_pt = person_type_injury_rates(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, extra_filter_sql=extra_sql)
+                st.plotly_chart(fig_pt, width='stretch')
             except Exception as e:
                 st.error('Could not build Person Type chart: ' + str(e))
 
         with r3c2:
             st.markdown('**Q6 — Ejection vs Severity**')
             try:
-                fig_ej = ejection_vs_severity(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
-                st.plotly_chart(fig_ej, use_container_width=True)
+                fig_ej = ejection_vs_severity(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, extra_filter_sql=extra_sql)
+                st.plotly_chart(fig_ej, width='stretch')
             except Exception as e:
                 st.error('Could not build Ejection chart: ' + str(e))
 
@@ -611,16 +752,16 @@ if st.session_state.get('generate', False):
         with r4c1:
             st.markdown('**Q7 — Position (Driver vs Passenger)**')
             try:
-                fig_pos = position_vs_severity(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
-                st.plotly_chart(fig_pos, use_container_width=True)
+                fig_pos = position_vs_severity(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, extra_filter_sql=extra_sql)
+                st.plotly_chart(fig_pos, width='stretch')
             except Exception as e:
                 st.error('Could not build Position chart: ' + str(e))
 
         with r4c2:
             st.markdown('**Q8 — Weekday vs Weekend Injuries**')
             try:
-                fig_wd = weekday_weekend_injuries(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
-                st.plotly_chart(fig_wd, use_container_width=True)
+                fig_wd = weekday_weekend_injuries(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, extra_filter_sql=extra_sql)
+                st.plotly_chart(fig_wd, width='stretch')
             except Exception as e:
                 st.error('Could not build Weekday/Weekend chart: ' + str(e))
 
@@ -629,16 +770,16 @@ if st.session_state.get('generate', False):
         with r5c1:
             st.markdown('**Q9 — Motorcycle vs Car Fatality Rate**')
             try:
-                fig_mc = motorcycle_vs_car_fatalities(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
-                st.plotly_chart(fig_mc, use_container_width=True)
+                fig_mc = motorcycle_vs_car_fatalities(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, extra_filter_sql=extra_sql)
+                st.plotly_chart(fig_mc, width='stretch')
             except Exception as e:
                 st.error('Could not build Motorcycle vs Car chart: ' + str(e))
 
         with r5c2:
             st.markdown('**Q10 — Borough vs Injury Types**')
             try:
-                fig_bi = borough_vs_injury(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
-                st.plotly_chart(fig_bi, use_container_width=True)
+                fig_bi = borough_vs_injury(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, extra_filter_sql=extra_sql)
+                st.plotly_chart(fig_bi, width='stretch')
             except Exception as e:
                 st.error('Could not build Borough vs Injury chart: ' + str(e))
             vehicles_to_query = vehicle_compare if vehicle_compare else vehicles

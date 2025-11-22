@@ -21,7 +21,7 @@ The datasets were integrated using the common field **`COLLISION_ID`**.
 
 ## Setup Instructions 
 
-This project was developed using **Google Colab**
+This project was developed using **Google Colab** for initial exploration and cleaning, and the interactive dashboard was built using **Streamlit** for local and cloud deployment.
 
 ### 1. Open the Notebook
 
@@ -33,10 +33,10 @@ Click the link to open the notebook in Google Colab:
 
 - Click `Runtime` → `Run all` to execute all cells sequentially.
 - The notebook will:
-  - Load the NYC crash datasets
-  - Perform pre-cleaning and integration
-  - Produce the final cleaned dataset
-  - Generate visualizations for exploration
+    - Load the NYC crash datasets
+    - Perform pre-cleaning and integration
+    - Produce the final cleaned dataset
+    - Generate visualizations for exploration
 
 ---
 
@@ -46,10 +46,10 @@ The dashboard was deployed online for interactive use.
 
 ### Steps:
 
-1. The dashboard was built using **Dash (Plotly)** in Python.
+1. The dashboard was built using **Streamlit** in Python, with **Plotly** used for interactive visualizations.
 2. All dependencies are listed in `requirements.txt`.
-3. The repository was pushed to **Render** for deployment.
-4. Render automatically installed the dependencies and launched the app.
+3. The repository can be deployed to cloud services that support Python and Streamlit (e.g., Render, Streamlit Cloud, or Heroku).
+4. The deploy platform will install dependencies from `requirements.txt` and run the Streamlit app.
 
 ### Live Dashboard
 
@@ -57,6 +57,12 @@ The dashboard was deployed online for interactive use.
 `[Paste your live dashboard link here]`
 
 > Users can interact with the dashboard in real time without installing anything locally.
+
+---
+
+## Related Repositories
+
+- **Upstream / Reference Repo:** https://github.com/kevorkian-mano/Motor_Vehicle_Collisions_Project.git
 
 ---
 
@@ -151,105 +157,78 @@ The Persons dataset was fully cleaned, standardized, and ready for integration w
 
 
 #### **Osama Loay – Pre-Cleaning of Crashes Dataset and Post Cleaning**
-
 **Steps Taken:**
 
-1. .
-        
-2. 
-        
-3. 
-        
-4. 
-        
-5. 
-        
-6. 
-        
-7. 
-        
-8. 
-        
-9. 
-        
-10. 
-        
+1. **Full crash CSV cleaning:** Cleaned the original `crashes.csv` file by standardizing column names, trimming whitespace, normalizing case, and removing obvious duplicates and invalid rows.
 
-**Result:**  
+2. **Latitude/Longitude → ZIP code / Borough imputation:** Imputed missing `ZIP_CODE` values using latitude and longitude when available. When `lat`/`long` were missing, constructed an address using the available `ON_STREET_NAME`, `CROSS_STREET_NAME`, and `OFF_STREET_NAME` (when present) to geocode approximate coordinates, then inferred ZIP and `BOROUGH` from the geocoded ZIP.
+
+3. **Vehicle type normalization:** Reduced the noisy `VEHICLE_TYPE_CODE` domain from ~1,204 distinct raw values down to a consolidated set of ~12 normalized categories (e.g., `Car`, `Taxi`, `Truck`, `Bus`, `Motorcycle`, `Bicycle`, `Pedestrian`, `Other`, etc.) through mappings and rule-based grouping.
+
+4. **Contributing factor normalization:** Reduced the contributing factor columns from about 56 noisy values to a smaller, cleaned set of canonical factors by grouping similar text labels and correcting common misspellings and variants.
+
+5. **Missing lat/long imputation from intersection fields:** For rows missing coordinates, formed an address string from `CROSS_STREET_NAME`, `ON_STREET_NAME`, and `OFF_STREET_NAME` to approximate location, then used that to derive latitude/longitude and subsequently ZIP and `BOROUGH` when direct coordinates were not present.
+
+6. **Dropped sparse columns and aggregated extras:** Removed very sparse columns such as `CONTRIBUTING_FACTOR_VEHICLE_3/4/5` and `VEHICLE_TYPE_CODE_3/4/5`. For multi-valued vehicle / factor columns that were sporadically populated, aggregated their non-null values into a single list column to preserve information while simplifying the schema.
+
+7. **Dropped extremely sparse rows:** Removed rows with excessive missingness that could not be reliably imputed, focusing downstream analyses on higher-quality records.
+
+8. **Post-integration consistency checks:** After joining with the `persons.csv` dataset using `COLLISION_ID`, removed rows where crash-level information remained too sparse. Recomputed and corrected inconsistent injury and killed counts where possible.
+
+9. **Group-based imputation for multi-person crashes:** Where a crash had missing person-level values but multiple persons recorded in `persons.csv`, attempted to fill missing fields by grouping on `COLLISION_ID` and propagating the most plausible values across related person records (e.g., shared crash_time, location, or vehicle-level features) to reduce sparsity.
+
+10. **General cleanup & verification:** Standardized string fields, collapsed redundant categories, removed duplicates, validated ranges (ages 0–120), and saved the cleaned crashes table for integration and dashboarding.
+
+**Result:**
+
+The crashes dataset was cleaned and enriched: missing ZIP/Borough and many missing coordinates were imputed, vehicle and contributing-factor values were normalized, sparse columns and rows were removed or consolidated, and post-integration repairs improved consistency across crash- and person-level data. The cleaned dataset was output for integration with the Persons table and for use by the dashboard and aggregation scripts.
 
 #### **Dareen Ahmed & Lama Hany – Dashboard Development and Deployment**
-
 **Steps Taken:**
 
-1. **Dashboard Design and Layout**
-    
-    - Designed an interactive dashboard to visualize NYC traffic crash data.
-        
-    - Organized visualizations into five tabs for logical exploration:
-        
-        1. **Crash Geography** – Maps, trends over time, and borough comparison.
-            
-        2. **Vehicles & Factors** – Contributing factors, vehicle vs factor heatmaps, and vehicle type trends.
-            
-        3. **People & Injuries** – Safety equipment, injury types, emotional status, ejection, position in vehicle, person types over time, top complaints.
-            
-        4. **Demographics** – Age and gender distributions, real-time statistics.
-            
-        5. **Advanced Analytics** – Crash hotspot clustering, risk correlation matrix, temporal risk patterns, severity prediction, and spatial risk density.
-            
-2. **Data Integration into Dashboard**
-    
-    - Loaded the cleaned and integrated crash + persons dataset.
-        
-    - Used **Pandas** for data manipulation and **NumPy** for numeric calculations.
-        
-    - Ensured all visualizations respond dynamically to filters.
-        
-3. **Interactive Filters & Features**
-    
-    - Implemented **dropdown filters** for Borough, Year, Vehicle Type, Contributing Factor, and Injury Type.
-        
-    - Developed a **search mode** for text-based queries (e.g., “Brooklyn 2022 pedestrian crashes”).
-        
-    - Added a **Generate Report button** to update all visualizations dynamically.
-        
-4. **Visualizations**
-    
-    - Used **Plotly Express** and **Plotly Graph Objects** for interactive charts.
-        
-    - Types of visualizations included:
-        
-        - Maps for geographic hotspots.
-            
-        - Line and bar charts for temporal trends.
-            
-        - Heatmaps for correlations between factors and vehicle types.
-            
-        - Pie charts and histograms for demographics.
-            
-    - Incorporated interactivity: hover info, zoom, and real-time filter updates.
-        
-5. **Advanced Analytics**
-    
-    - Implemented machine learning clustering to identify crash hotspots.
-        
-    - Created risk correlation matrices and temporal risk patterns to guide safety interventions.
-        
-    - Analyzed factors contributing to severe injuries and mapped spatial risk densities.
-        
-6. **Deployment**
-    
-    - Prepared the dashboard for deployment using **streamline** .
-        
-    - Ensured all dependencies are included in `requirements.txt`.
-        
-    - Verified live functionality: all interactive filters, search mode, and charts update correctly in real time.
-        
-    - Provided a live URL for public access.
-        
+1. **Product design & UX leadership**
 
-**Result:**  
-A fully interactive, user-friendly dashboard enabling city planners, safety advocates, and the public to explore crash data, identify trends, and analyze risk factors for informed decision-making.
+   - Led the visual and interaction design for the dashboard, producing a clear, presentation-ready layout organized into purpose-driven tabs (Crash Geography, Vehicles & Factors, People & Injuries, Demographics, Advanced Analytics).
+
+   - Implemented a dark navy/indigo theme and accessible color palette for strong contrast and professional presentation suitable for reports and demos.
+
+2. **Engineering the interactive UI**
+
+   - Built robust Streamlit pages and components with responsive sidebar controls, session-state callbacks, and an explicit "Generate" action to make updates deterministic and reproducible during demos.
+
+   - Removed redundant widgets and consolidated filters (e.g., replacing a year slider with a multi-select) to simplify user workflows and avoid duplicate state.
+
+3. **High-quality visualizations**
+
+   - Implemented interactive Plotly charts (maps, line/bar trends, heatmaps, histograms) tuned for clarity: informative hover text, consistent color mappings, and helpful axis/legend defaults.
+
+   - Extracted figure-building code into reusable functions so charts are consistent, testable, and can be used both in the UI and in offline exports.
+
+4. **Performance & engineering optimizations**
+
+   - Architected the app to use Parquet + DuckDB scanning for memory-efficient queries rather than loading full DataFrames into memory, which enables cloud-friendly deployment.
+
+   - Added support for pre-aggregated Parquet artifacts generated by offline scripts; integrated a `use_preaggregates` fast path so person-level analytics render instantly when conditions allow.
+
+   - Tuned queries and I/O to minimize repeated scans and to leverage cached/parquet-scan operations for common views.
+
+5. **Testing, robustness & documentation**
+
+   - Added smoke tests for figure builders to ensure each chart returns a Plotly figure object and to catch regressions during refactors.
+
+   - Handled messy real-world schema variations by adding column-detection and safe identifier quoting so the app tolerates upstream schema drift.
+
+   - Documented dashboard behavior, pre-aggregation workflow, and data storage paths in the README so teammates and reviewers can reproduce results.
+
+6. **Deployment & polish**
+
+   - Prepared the app for deployment on cloud hosts supporting Streamlit and Git LFS for large artifacts; ensured `requirements.txt` and startup instructions are complete.
+
+   - Finalized UI polish and accessibility checks so the dashboard presents well for graders, stakeholders, and public demos.
+
+**Result:**
+
+The dashboard codebase now contains professionally designed UI/UX, production-oriented engineering (DuckDB + Parquet + pre-aggregates), tested and reusable visualization builders, and clear documentation — a comprehensive, polished deliverable that greatly improves the project's presentation quality and reliability.
 
 
 ## Tools & Technologies
@@ -257,10 +236,12 @@ A fully interactive, user-friendly dashboard enabling city planners, safety advo
 - Python
 - Pandas & NumPy
 - Plotly & Plotly Express
-- Dash (Plotly)
-- Dash Bootstrap Components
+- Streamlit (app framework)
 - Scikit-learn (clustering)
 - Git & GitHub
+ - Git LFS (for large data/artifacts)
+ - Parquet (columnar storage for datasets and pre-aggregations)
+ - Pre-aggregation workflows (Parquet aggregates + DuckDB queries)
 
 
 
@@ -337,7 +318,7 @@ Does being **ejected from the vehicle** increase the chance of serious injury?
 > Variables: `VEHICLE_TYPE`, `NUMBER_OF_PERSONS_KILLED`
 
 
-**Q9.**  s there a relationship between crash location (borough) and the type of injury (minor vs severe)?
+**Q10.**  Is there a relationship between crash location (borough) and the type of injury (minor vs severe)?
 
 > Goal: Check if injury severity varies by borough.  
 > Variables: `BOROUGH`, `PERSON_INJURY`
