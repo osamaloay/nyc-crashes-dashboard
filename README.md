@@ -19,6 +19,10 @@ We explored, cleaned, integrated, and visualized the data, then built a fully in
 The datasets were integrated using the common field **`COLLISION_ID`**.
 
 ---
+## Setup instruction 
+1. Open the notebook `[https://colab.research.google.com/drive/1UK9vFCahXrsqw1JO0YTvsdzSSdIHK_tj?usp=sharing]`
+2. run each cell
+3. open ngrok link
 
 ## Deployment Instructions
 
