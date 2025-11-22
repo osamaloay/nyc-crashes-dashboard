@@ -29,13 +29,13 @@ st.markdown(
     <style>
     /* App background and primary containers */
     :root, .stApp { background: #071122; color: #e6eef8; }
-    .block-container { background: #0f1b2a; border-radius: 10px; padding: 1.2rem 1.5rem; color: #e6eef8; max-width: 1200px; margin: 1.5rem auto; }
+    .block-container { background: #0f1b2a; border-radius: 10px; padding: 1.2rem 1.5rem; color: #e6eef8; max-width: 900px; margin: 1.5rem auto; }
 
     /* ensure there's top padding so the header/title is fully visible */
     header, .stApp, .block-container { padding-top: 1rem; }
 
     /* prevent the top title from being clipped and give it room */
-    h1 { margin-top: 0.25rem !important; margin-bottom: 0.35rem !important; font-size: 28px !important; line-height: 1.15 !important; word-break: break-word; }
+    h1 { margin-top: 0.25rem !important; margin-bottom: 0.35rem !important; font-size: 36px !important; line-height: 1.12 !important; word-break: break-word; }
     .stPageHeader { padding-top: 0.5rem; }
 
     /* Headings and primary accents */
@@ -43,7 +43,7 @@ st.markdown(
     .stMetricValue, .stMetricLabel { color: #e6eef8 !important; }
 
     /* Buttons: teal/indigo accents with readable text */
-    .stButton>button { background-color: #0ea5a4 !important; color: #052025 !important; border: 1px solid rgba(255,255,255,0.06) !important; }
+    .stButton>button { background-color: #7c8cff !important; color: #052025 !important; border: 1px solid rgba(255,255,255,0.06) !important; }
 
     /* Sidebar: slightly darker to separate content and increase width for controls */
     .css-1d391kg, .stSidebar { background-color: #07121a !important; color: #e6eef8 !important; }

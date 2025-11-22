@@ -34,14 +34,14 @@ DARK_TEMPLATE = dict(
         xaxis=dict(color="#e6eef8", gridcolor="#072433"),
         yaxis=dict(color="#e6eef8", gridcolor="#072433"),
         legend=dict(font=dict(color="#e6eef8")),
-        colorway=["#0ea5a4", "#7c8cff", "#06b6d4", "#4ade80", "#60a5fa", "#94d2bd"],
+        colorway=["#7c8cff", "#0ea5a4", "#06b6d4", "#4ade80", "#60a5fa", "#94d2bd"],
     )
 )
 
 # Brighter borough palette for visibility on dark background
 BOROUGH_COLORS = {
-    'Manhattan': '#06b6d4',
-    'Brooklyn': '#7c8cff',
+    'Manhattan': '#7c8cff',
+    'Brooklyn': '#06b6d4',
     'Queens': '#4ade80',
     'Bronx': '#60a5fa',
     'Staten Island': '#94d2bd',
