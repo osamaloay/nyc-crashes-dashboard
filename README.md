@@ -51,14 +51,22 @@ The dashboard was deployed online for interactive use.
 
 ---
 
+## Related Links
+
+- **Exploration Notebook (Colab):** https://colab.research.google.com/drive/1UK9vFCahXrsqw1JO0YTvsdzSSdIHK_tj?usp=sharing
+- **Live demo (ngrok tunnel):** https://septimal-elene-tribrachial.ngrok-free.dev/
+- **Supplementary repo:** https://github.com/lusgad/nyc-crash-data.git
+
+---
+
 ## Team Contributions
 
 | Team Member        | Contribution                                                        |
 | ------------------ | ------------------------------------------------------------------- |
 | **Osama Loay**     | Pre-cleaning of the Crashes dataset + Post-integration cleaning     |
 | **Manuel Youssef** | Pre-cleaning of the Persons dataset + Integration                   |
-| **Dareen Ahmed**   | Dashboard design & development, advanced visualizations, deployment |
-| **Lama Hany**      | Dashboard development support & deployment assistance               |
+| **Dareen Ahmed**   | Dashboard engineering, interactive visualizations, performance & deployment |
+| **Lama Hany**      | UX / visual design lead, advanced chart design, presentation polish |
 
 ### Detailed Team Contributions
 
@@ -168,52 +176,32 @@ The Persons dataset was fully cleaned, standardized, and ready for integration w
 
 The crashes dataset was cleaned and enriched: missing ZIP/Borough and many missing coordinates were imputed, vehicle and contributing-factor values were normalized, sparse columns and rows were removed or consolidated, and post-integration repairs improved consistency across crash- and person-level data. The cleaned dataset was output for integration with the Persons table and for use by the dashboard and aggregation scripts.
 
-#### **Dareen Ahmed & Lama Hany – Dashboard Development and Deployment**
-**Steps Taken:**
+#### **Lama Hany – UX & Advanced Visual Design (Lead)**
 
-1. **Product design & UX leadership**
+**Highlights:**
 
-   - Led the visual and interaction design for the dashboard, producing a clear, presentation-ready layout organized into purpose-driven tabs (Crash Geography, Vehicles & Factors, People & Injuries, Demographics, Advanced Analytics).
+- Led the visual and interaction design for the dashboard, producing a clear, presentation-ready layout organized into purpose-driven tabs (Crash Geography, Vehicles & Factors, People & Injuries, Demographics, Advanced Analytics).
+- Drove the design system: dark navy/indigo theme, accessible color palette, and consistent typography and spacing to make the dashboard polished and demo-ready.
+- Designed advanced, presentation-quality visualizations (complex heatmaps, layered map views, annotation-ready charts) that significantly raised the project's visual standards.
+- Collaborated closely with engineering to ensure visual fidelity across responsive views and export-friendly layouts.
 
-   - Implemented a dark navy/indigo theme and accessible color palette for strong contrast and professional presentation suitable for reports and demos.
+**Impact:** Lama's design leadership and advanced chart design were instrumental — the dashboard's clarity, visual polish, and storytelling quality would not have reached its current level without her work.
 
-2. **Engineering the interactive UI**
+#### **Dareen Ahmed – Dashboard Engineering & Delivery (Lead)**
 
-   - Built robust Streamlit pages and components with responsive sidebar controls, session-state callbacks, and an explicit "Generate" action to make updates deterministic and reproducible during demos.
+**Highlights:**
 
-   - Removed redundant widgets and consolidated filters (e.g., replacing a year slider with a multi-select) to simplify user workflows and avoid duplicate state.
+- Built the Streamlit pages, components, and control flows that power the interactive experience, including session-state management and a deterministic "Generate" workflow for reproducible demos.
+- Implemented the Plotly visualizations and extracted reusable figure-builder functions to ensure consistency and simplify testing and reuse.
+- Implemented performance-oriented engineering: Parquet + DuckDB scanning, pre-aggregated Parquet artifacts, and query tuning so large person-level analytics render quickly.
+- Added smoke tests, schema-robust column-detection, and error handling to improve reliability during refactors and deployment.
+- Prepared the app for cloud deployments and integration with Git LFS for large artifacts; ensured `requirements.txt` and deployment instructions are complete.
 
-3. **High-quality visualizations**
+**Impact:** Dareen's engineering leadership turned the cleaned datasets and visual designs into a stable, high-performance dashboard—without this work the interactive product would not have been deliverable.
 
-   - Implemented interactive Plotly charts (maps, line/bar trends, heatmaps, histograms) tuned for clarity: informative hover text, consistent color mappings, and helpful axis/legend defaults.
+**Acknowledgement:**
 
-   - Extracted figure-building code into reusable functions so charts are consistent, testable, and can be used both in the UI and in offline exports.
-
-4. **Performance & engineering optimizations**
-
-   - Architected the app to use Parquet + DuckDB scanning for memory-efficient queries rather than loading full DataFrames into memory, which enables cloud-friendly deployment.
-
-   - Added support for pre-aggregated Parquet artifacts generated by offline scripts; integrated a `use_preaggregates` fast path so person-level analytics render instantly when conditions allow.
-
-   - Tuned queries and I/O to minimize repeated scans and to leverage cached/parquet-scan operations for common views.
-
-5. **Testing, robustness & documentation**
-
-   - Added smoke tests for figure builders to ensure each chart returns a Plotly figure object and to catch regressions during refactors.
-
-   - Handled messy real-world schema variations by adding column-detection and safe identifier quoting so the app tolerates upstream schema drift.
-
-   - Documented dashboard behavior, pre-aggregation workflow, and data storage paths in the README so teammates and reviewers can reproduce results.
-
-6. **Deployment & polish**
-
-   - Prepared the app for deployment on cloud hosts supporting Streamlit and Git LFS for large artifacts; ensured `requirements.txt` and startup instructions are complete.
-
-   - Finalized UI polish and accessibility checks so the dashboard presents well for graders, stakeholders, and public demos.
-
-**Result:**
-
-The dashboard codebase now contains professionally designed UI/UX, production-oriented engineering (DuckDB + Parquet + pre-aggregates), tested and reusable visualization builders, and clear documentation — a comprehensive, polished deliverable that greatly improves the project's presentation quality and reliability.
+Lama and Dareen together drove the dashboard's design and engineering end-to-end; their combined contributions were essential — the project would not be in a presentable, production-ready state without their work.
 
 
 ## Tools & Technologies
