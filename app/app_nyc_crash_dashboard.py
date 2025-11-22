@@ -27,6 +27,16 @@ from app.figures import (
     temporal_heatmap,
     severity_by_borough,
     density_map,
+    safety_vs_injury,
+    injuries_by_hour,
+    age_group_counts,
+    severity_by_gender,
+    person_type_injury_rates,
+    ejection_vs_severity,
+    position_vs_severity,
+    weekday_weekend_injuries,
+    motorcycle_vs_car_fatalities,
+    borough_vs_injury,
 )
 
 st.set_page_config(page_title="NYC Crash Dashboard", layout="wide", initial_sidebar_state="expanded")
@@ -272,6 +282,9 @@ with st.sidebar:
     vehicle_compare = st.multiselect('Compare vehicle types (Year granularity only)', options=meta.get('vehicle_types', []), default=None)
     cluster_map = st.checkbox('Aggregate map points (grid cluster)', value=True)
     cluster_precision = st.slider('Cluster precision (decimal degrees)', 2, 4, 3)
+    st.markdown('---')
+    st.write('Person-level options')
+    person_sample = st.slider('Person-level sample fraction', 0.01, 1.0, 0.05, step=0.01)
 
 # Apply filters on button click or default initial run
 def apply_filters(df):
@@ -382,7 +395,7 @@ if generate:
         return dfq
 
     # Tabs for different detailed figures
-    tab_overview, tab_vehicles, tab_factors, tab_map, tab_time, tab_severity = st.tabs(["Overview", "Vehicles", "Factors", "Map", "Time Series", "Severity"])
+    tab_overview, tab_vehicles, tab_factors, tab_map, tab_time, tab_severity, tab_person = st.tabs(["Overview", "Vehicles", "Factors", "Map", "Time Series", "Severity", "Person-level"])
 
     with tab_overview:
         st.subheader("Summary numbers")
@@ -467,6 +480,111 @@ if generate:
                 st.plotly_chart(fig_tv, width='stretch')
         else:
             # Month/Day: run on-demand DuckDB query (reads merged_cleaned_dataset.csv if available)
+            vehicles_to_query = vehicle_compare if vehicle_compare else vehicles
+            if not vehicles_to_query:
+                st.info('Select one or more vehicle types in the sidebar to see Month/Day trends (on-demand query).')
+            else:
+                with st.spinner('Querying raw dataset for vehicle trends...'):
+                    td = duckdb_vehicle_trend(vehicles_to_query, granularity, boroughs or [], year_range)
+                if not td.empty:
+                    fig_vd = px.line(td, x='period', y='count', color='vehicle', markers=True, title=f'Crashes by {granularity} (selected vehicles)')
+                    st.plotly_chart(fig_vd, width='stretch')
+                else:
+                    st.info('No results from raw dataset for the selected filters/vehicles or raw data file not present.')
+
+    with tab_person:
+        st.subheader('Person-level analysis')
+        st.markdown('Use sampling to limit scan size when raw person-level tables are large.')
+
+        # Row 1: Safety vs Injury and Injuries by Hour
+        r1c1, r1c2 = st.columns([2,3])
+        with r1c1:
+            st.markdown('**Q1 — Safety equipment vs injury**')
+            try:
+                fig_safety = safety_vs_injury(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, sample_frac=person_sample)
+                st.plotly_chart(fig_safety, use_container_width=True)
+            except Exception as e:
+                st.error('Could not build Safety vs Injury chart: ' + str(e))
+
+        with r1c2:
+            st.markdown('**Q2 — Injuries by Hour**')
+            try:
+                fig_hour = injuries_by_hour(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range, sample_frac=person_sample)
+                st.plotly_chart(fig_hour, use_container_width=True)
+            except Exception as e:
+                st.error('Could not build Injuries by Hour chart: ' + str(e))
+
+        # Row 2: Age groups and Gender severity
+        r2c1, r2c2 = st.columns(2)
+        with r2c1:
+            st.markdown('**Q3 — Age group counts**')
+            try:
+                fig_ageg = age_group_counts(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
+                st.plotly_chart(fig_ageg, use_container_width=True)
+            except Exception as e:
+                st.error('Could not build Age Group chart: ' + str(e))
+
+        with r2c2:
+            st.markdown('**Q4 — Severity by Gender**')
+            try:
+                fig_gender = severity_by_gender(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
+                st.plotly_chart(fig_gender, use_container_width=True)
+            except Exception as e:
+                st.error('Could not build Severity by Gender chart: ' + str(e))
+
+        # Row 3: Person type injury rates and Ejection
+        r3c1, r3c2 = st.columns(2)
+        with r3c1:
+            st.markdown('**Q5 — Injury rate by Person Type**')
+            try:
+                fig_pt = person_type_injury_rates(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
+                st.plotly_chart(fig_pt, use_container_width=True)
+            except Exception as e:
+                st.error('Could not build Person Type chart: ' + str(e))
+
+        with r3c2:
+            st.markdown('**Q6 — Ejection vs Severity**')
+            try:
+                fig_ej = ejection_vs_severity(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
+                st.plotly_chart(fig_ej, use_container_width=True)
+            except Exception as e:
+                st.error('Could not build Ejection chart: ' + str(e))
+
+        # Row 4: Position vs Severity and Weekday/Weekend
+        r4c1, r4c2 = st.columns(2)
+        with r4c1:
+            st.markdown('**Q7 — Position (Driver vs Passenger)**')
+            try:
+                fig_pos = position_vs_severity(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
+                st.plotly_chart(fig_pos, use_container_width=True)
+            except Exception as e:
+                st.error('Could not build Position chart: ' + str(e))
+
+        with r4c2:
+            st.markdown('**Q8 — Weekday vs Weekend Injuries**')
+            try:
+                fig_wd = weekday_weekend_injuries(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
+                st.plotly_chart(fig_wd, use_container_width=True)
+            except Exception as e:
+                st.error('Could not build Weekday/Weekend chart: ' + str(e))
+
+        # Row 5: Motorcycle vs Car fatalities and Borough vs injury
+        r5c1, r5c2 = st.columns(2)
+        with r5c1:
+            st.markdown('**Q9 — Motorcycle vs Car Fatality Rate**')
+            try:
+                fig_mc = motorcycle_vs_car_fatalities(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
+                st.plotly_chart(fig_mc, use_container_width=True)
+            except Exception as e:
+                st.error('Could not build Motorcycle vs Car chart: ' + str(e))
+
+        with r5c2:
+            st.markdown('**Q10 — Borough vs Injury Types**')
+            try:
+                fig_bi = borough_vs_injury(parquet_path='nyc_crashes.parquet', boroughs=boroughs or None, year_range=year_range)
+                st.plotly_chart(fig_bi, use_container_width=True)
+            except Exception as e:
+                st.error('Could not build Borough vs Injury chart: ' + str(e))
             vehicles_to_query = vehicle_compare if vehicle_compare else vehicles
             if not vehicles_to_query:
                 st.info('Select one or more vehicle types in the sidebar to see Month/Day trends (on-demand query).')
